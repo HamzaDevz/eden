@@ -22,7 +22,7 @@ Utilitaires partagés. Pour la perf, trois morceaux comptent : le système de r�
 
 - `SetCurrentThreadToPerformanceCores` `src/common/thread.cpp:542-549` (session ADPF Render si dispo, sinon affinité), efficacité `:552`, arrière-plan `:562`. Topologie lue dans sysfs `:254-256`, `sched_setaffinity` `:341`.
 - Appelants : `src/core/cpu_manager.cpp:177`, `src/core/core_timing.cpp:77`, `src/video_core/gpu_thread.cpp:33`, `src/video_core/renderer_vulkan/vk_scheduler.cpp:273`, `src/video_core/renderer_vulkan/vk_present_manager.cpp:333`.
-- ADPF : `src/common/adpf.cpp` charge `APerformanceHint_*` dynamiquement (`:54-87`), sessions Render et Background, cible par défaut 16.67 ms (`:24`), `ReportFrameInterval` `:253-279`.
+- ADPF : `src/common/adpf.cpp` charge `APerformanceHint_*` dynamiquement (`:54-87`), sessions Render et Background, cible par défaut 16.67 ms (`:24`), aucun rapport de durée réelle (voir `docs/Odin3.md` §7).
 - Pool de workers générique : `src/common/thread_worker.h:26-131` (placement Background ⇒ priorité basse).
 - Piège : les noms de threads de plus de 15 caractères sont tronqués sous Linux (`src/common/thread.cpp:517-524`), ex. « VkPipelineBuilder » dans une trace.
 

@@ -30,7 +30,6 @@ using PFN_GetManager = AHintManager* (*)();
 using PFN_CreateSession = AHintSession* (*)(AHintManager*, const s32*, size_t, s64);
 using PFN_CloseSession = void (*)(AHintSession*);
 using PFN_UpdateTarget = int (*)(AHintSession*, s64);
-using PFN_ReportActual = int (*)(AHintSession*, s64);
 using PFN_SetThreads = int (*)(AHintSession*, const pid_t*, size_t);
 using PFN_SetPowerEfficiency = int (*)(AHintSession*, bool);
 
@@ -39,7 +38,6 @@ struct Api {
     PFN_CreateSession create_session = nullptr;
     PFN_CloseSession close_session = nullptr;
     PFN_UpdateTarget update_target = nullptr;
-    PFN_ReportActual report_actual = nullptr;
     PFN_SetThreads set_threads = nullptr;
     PFN_SetPowerEfficiency set_power_efficiency = nullptr;
     AHintManager* manager = nullptr;
@@ -63,16 +61,13 @@ const Api& Resolve() {
             reinterpret_cast<PFN_CloseSession>(load("APerformanceHint_closeSession"));
         resolved.update_target =
             reinterpret_cast<PFN_UpdateTarget>(load("APerformanceHint_updateTargetWorkDuration"));
-        resolved.report_actual =
-            reinterpret_cast<PFN_ReportActual>(load("APerformanceHint_reportActualWorkDuration"));
         resolved.set_threads =
             reinterpret_cast<PFN_SetThreads>(load("APerformanceHint_setThreads"));
         resolved.set_power_efficiency = reinterpret_cast<PFN_SetPowerEfficiency>(
             load("APerformanceHint_setPreferPowerEfficiency"));
 
         if (resolved.get_manager == nullptr || resolved.create_session == nullptr ||
-            resolved.close_session == nullptr || resolved.update_target == nullptr ||
-            resolved.report_actual == nullptr) {
+            resolved.close_session == nullptr || resolved.update_target == nullptr) {
             LOG_INFO(Common, "Performance hint API not exported, ADPF is disabled");
             return resolved;
         }
@@ -101,10 +96,7 @@ struct SessionState {
 std::mutex g_mutex;
 std::array<SessionState, 2> g_sessions;
 
-constexpr s64 MAX_REPORTED_TARGETS = 4;
-
 std::atomic<s64> g_target_ns{DEFAULT_TARGET.count()};
-thread_local std::chrono::steady_clock::time_point t_last_frame{};
 
 SessionState& StateOf(Session session) {
     return g_sessions[static_cast<size_t>(session)];
@@ -250,34 +242,6 @@ void SetTargetWorkDuration(std::chrono::nanoseconds target) {
     }
 }
 
-void ReportFrameInterval() {
-    const Api& api = Resolve();
-    if (!api.usable) {
-        return;
-    }
-
-    const auto now = std::chrono::steady_clock::now();
-    const auto previous = t_last_frame;
-    t_last_frame = now;
-    if (previous.time_since_epoch().count() == 0) {
-        return;
-    }
-
-    s64 actual = std::chrono::duration_cast<std::chrono::nanoseconds>(now - previous).count();
-    if (actual <= 0) {
-        return;
-    }
-
-    const s64 ceiling = g_target_ns.load(std::memory_order_relaxed) * MAX_REPORTED_TARGETS;
-    actual = (std::min)(actual, ceiling);
-
-    std::scoped_lock lock{g_mutex};
-    SessionState& state = StateOf(Session::Render);
-    if (state.handle != nullptr) {
-        api.report_actual(state.handle, actual);
-    }
-}
-
 void Shutdown() {
     if (!Resolve().usable) {
         return;
@@ -307,8 +271,6 @@ bool AddCurrentThread(Session) {
 void RemoveCurrentThread() {}
 
 void SetTargetWorkDuration(std::chrono::nanoseconds) {}
-
-void ReportFrameInterval() {}
 
 void Shutdown() {}
 

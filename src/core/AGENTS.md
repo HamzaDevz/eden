@@ -36,7 +36,7 @@ Cœur HLE : `System`, noyau émulé, services (nvdrv, vi…), mémoire invitée,
 ## Présentation, vsync, mesure
 
 - `vi::Conductor` `src/core/hle/service/vi/conductor.cpp:25` (event « ScreenComposition », thread « VSyncThread » `:86`), `ProcessVsync` `:76`, cible ADPF `:78`.
-- Composition : `HardwareComposer::ComposeLocked` `src/core/hle/service/nvnflinger/hardware_composer.cpp:49` → `nvdisp_disp0::Composite` `src/core/hle/service/nvdrv/devices/nvdisp_disp0.cpp:63` → `RequestComposite` `:90`, rapport ADPF + limitation de vitesse + perf stats `:91-94`.
+- Composition : `HardwareComposer::ComposeLocked` `src/core/hle/service/nvnflinger/hardware_composer.cpp:49` → `nvdisp_disp0::Composite` `src/core/hle/service/nvdrv/devices/nvdisp_disp0.cpp:63` → `RequestComposite` `:89`, limitation de vitesse + perf stats `:90-92`.
 - `PerfStats` : `src/core/perf_stats.h:15-24` (fps système, fps jeu, frametime, vitesse), `GetAndResetStats` `src/core/perf_stats.cpp:102-129` (lecture destructive), CSV si `record_frame_times` `:35-62`.
 
 ## Pièges

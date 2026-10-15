@@ -227,6 +227,18 @@ void TurboMode::Run(std::stop_token stop_token) {
 #endif
         // Wait for the next graphics queue submission if necessary.
         std::unique_lock lk{m_submission_lock};
+#ifdef __ANDROID__
+        // Nothing above blocks on Android and the kgsl turbo state is global and outlives the
+        // process, so only refresh it periodically and release it while the GPU is idle (paused).
+        m_submission_cv.wait_for(lk, stop_token, std::chrono::seconds{1}, [] { return false; });
+#ifdef ARCHITECTURE_arm64
+        if (std::chrono::steady_clock::now() - m_submission_time > std::chrono::milliseconds{100}) {
+            lk.unlock();
+            adrenotools_set_turbo(false);
+            lk.lock();
+        }
+#endif
+#endif
         m_submission_cv.wait(lk, stop_token, [this] {
             return (std::chrono::steady_clock::now() - m_submission_time) <=
                    std::chrono::milliseconds{100};

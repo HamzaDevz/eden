@@ -44,6 +44,9 @@
 #ifdef __ANDROID__
 #include <jni.h>
 #endif
+#if defined(__ANDROID__) && defined(ARCHITECTURE_arm64)
+#include <adrenotools/driver.h>
+#endif
 namespace Vulkan {
 namespace {
 
@@ -185,6 +188,12 @@ try
         turbo_mode.emplace(instance, dld);
         scheduler.RegisterOnSubmit([this] { turbo_mode->QueueSubmitted(); });
     }
+#if defined(__ANDROID__) && defined(ARCHITECTURE_arm64)
+    if (!turbo_mode) {
+        // Clear the global kgsl turbo state a previously killed session may have left behind.
+        adrenotools_set_turbo(false);
+    }
+#endif
 
 #ifdef HAS_RESHADE
     VideoCore::FxChain::Instance().LoadFromSettings();

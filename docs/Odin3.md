@@ -1,12 +1,13 @@
 # Odin 3 / Adreno 830 : par où commencer pour optimiser un jeu précis
 
-Note locale (branche odin3, non upstream). Matériel visé : AYN Odin 3, Snapdragon 8 Elite, Adreno 830, pilote Vulkan Qualcomm stock (pas de Turnip pour Adreno 8xx). Jeux de référence : Zelda Echoes of Wisdom `01008CF01BAAC000` (lent), Super Mario Bros. Wonder `010015100B514000` (correct). Build utilisée : Eden Optimized v0.2.1 (flavor `genshinSpoof`). Chemins relatifs à la racine, lignes au commit `e255c20db`. Cartes par module : `src/*/AGENTS.md`.
+Note locale (branche odin3, non upstream). Matériel visé : AYN Odin 3, Snapdragon 8 Elite, Adreno 830, pilote Vulkan Qualcomm stock 512.800.72 (des builds Turnip « Gen8 » existent, non testées). Jeux de référence : Zelda Echoes of Wisdom `01008CF01BAAC000` (lent), Super Mario Bros. Wonder `010015100B514000` (correct). Build utilisée : Eden Optimized v0.2.1 (flavor `genshinSpoof`). Chemins relatifs à la racine, lignes au commit `e255c20db`. Cartes par module : `src/*/AGENTS.md`.
 
 ## 0. Banc de test
 
 - Ni Docker ni l'émulateur Android de ce Mac n'ont d'Adreno ni de pilote Qualcomm : ils ne valident que la compilation et le démarrage. Le seul banc valable est l'Odin 3 via adb (USB, ou Wi-Fi avec `adb pair`/`adb connect`), `adb` étant dans `~/Library/Android/sdk/platform-tools`.
 - Build et variantes : `src/android/AGENTS.md`. Pour profiler, `relWithDebInfo` est débogable et s'installe à côté de l'officielle (suffixe de package), mais le suffixe annule le nom de package spoofé de « Optimized » : comparer aussi avec la build officielle.
 - Ne jamais désinstaller la build officielle pour installer la nôtre sans sauvegarde : la clé de signature diffère et la désinstallation efface les données.
+- Banc automatisé : `tools/odin3/run_variant.sh <nom> [Section.clé=valeur ...]` relance le jeu avec ces réglages par jeu, charge la sauvegarde à la manette virtuelle (`pad.sh`), fait marcher Link 60 s et écrit dans `tools/odin3/runs/<nom>/summary.txt` : fps hôte (timestamps SurfaceFlinger), part d'images lentes, puissance batterie, fréquences, températures et %CPU par thread. Il refuse d'envoyer une entrée si Eden n'a pas le focus.
 - Dossier utilisateur : `getExternalFilesDir(null)` (`src/android/app/src/main/java/org/yuzu/yuzu_emu/utils/DirectoryInitialization.kt:42`), soit `/storage/emulated/0/Android/data/<package>/files/`. On y trouve `config/custom/<TITLEID>.ini` (réglages par jeu), `shader/<titleid>/` (caches) et `log/`.
 
 ## 1. Mesurer avant de toucher
@@ -53,12 +54,12 @@ Côté code, deux pistes :
 - Vérifier d'abord que NCE est actif. `adb shell getconf PAGE_SIZE` doit renvoyer 4096, sinon fastmem et NCE sont coupés (`src/common/settings.cpp:181-211`). Le backend actif est donné par `getCpuBackend` (`src/android/app/src/main/jni/native.cpp:1018`).
 - Sous Dynarmic arm64, les options « Unsafe » n'ont aucun effet. Seul compte le contrôle de bornes fastmem (Auto vs Accurate), voir `src/dynarmic/AGENTS.md`.
 - Thread `GPU` saturé : les macros GPU passent par l'interpréteur sur arm64 (`src/video_core/macro.cpp:1340`), puis viennent `DmaPusher`, le texture cache et le buffer cache (`src/video_core/AGENTS.md`). Réglages à essayer : `gpu_accuracy` (Low par défaut sur Android), `dma_accuracy`, `use_reactive_flushing`, `sync_memory_operations`.
-- Mettre l'Odin 3 en mode performance AYN avant toute mesure. Les threads chauds sont déjà épinglés sur les gros cœurs, avec indications ADPF (`src/common/thread.cpp:542-549`).
+- Le profil de performance AYN actif pendant les mesures impose des planchers même au repos : CPU 0-5 ≥ 2,0 GHz, CPU 6-7 ≥ 2,25 GHz, GPU ≥ 660 MHz (`min_pwrlevel=6`). Toujours mesurer dans le même mode ; un mode plus économe est la prochaine piste batterie. Les threads chauds sont déjà épinglés sur les gros cœurs, avec indications ADPF (`src/common/thread.cpp:542-549`).
 
 ## 5. GPU hôte (Adreno 830)
 
 - `resolution_setup` à 0.75x ou 0.5x, avec `scaling_filter` SGSR (upscaler Snapdragon, `src/video_core/renderer_vulkan/present/sgsr.cpp:24-45`).
-- `renderer_force_max_clock` appelle `adrenotools_set_turbo` (`src/video_core/renderer_vulkan/vk_turbo_mode.cpp:157-160`). Son effet sur le pilote stock n'est pas vérifié.
+- `renderer_force_max_clock` appelle `adrenotools_set_turbo` (`src/video_core/renderer_vulkan/vk_turbo_mode.cpp`), qui coupe le DCVS et fige le GPU à 1100 MHz pour tout l'appareil, même après la mort du processus. En v0.2.1 le thread turbo tournait en boucle (98 % d'un gros cœur) et verrouillait EoW à 30 fps. Corrigé sur cette branche : rafraîchissement toutes les secondes, relâché quand le jeu est en pause, et remis à zéro au démarrage quand le réglage est coupé. `tools/odin3/kgslturbo 0` débloque un GPU resté figé.
 - Les contournements Qualcomm ont un coût permanent dans les shaders :
   - shuffle de subgroup transformé en boucle ;
   - Int64 émulé ;
@@ -76,3 +77,10 @@ Côté code, deux pistes :
   - Piège : ce point s'exécute après la création du device et du cache de pipelines (`src/core/core.cpp:292` puis `:403`). Il ne sert qu'aux réglages lus au fil de l'eau.
   - Pour `dyna_state` ou l'async, il faudrait appliquer l'override avant `CreateGPU`.
 - Contournement de pilote : `vulkan_device.cpp:522-583` pour les extensions et capacités, `Profile` (`vk_pipeline_cache.cpp:379-468`) pour les shaders. La génération Adreno n'est détectée nulle part en C++ ; seules la version du pilote (`vulkan_device.cpp:543-544`) et le nom du device sont disponibles.
+
+## 7. Mesures Zelda EoW (2026-10-15, donjon, 60 s de marche)
+
+- v0.2.1 officielle, réglages d'origine (turbo actif, précision GPU High) : 30,0 fps, 10,3 W, CPU à 105 °C.
+- Même build sans turbo : 55,5 fps, 6,6 W. Précision GPU Low et GPU asynchrone ne changent rien (55-56 fps, 6,4-6,7 W).
+- Les 8 % d'images lentes restants arrivent par salves d'exactement 12 images à 30 fps : le jeu passe 0,4 s en 30 fps après chaque image en retard.
+- Build de cette branche (`relWithDebInfo`) : 58,2 fps et 2,7 % d'images lentes avec turbo ; 59,3 fps et 1,2 % sans turbo, mais 9,5 W contre 6,4 W pour la v0.2.1. Cet écart de consommation reste à expliquer (changements upstream ou perte du profil pilote liée au suffixe de package).

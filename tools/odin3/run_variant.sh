@@ -4,11 +4,12 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 # run_variant.sh <name> [Section.key=value ...]: relaunch a game with these per-game overrides and
-# measure 60 s of gameplay into runs/<name>/.
+# measure DUR s (default 90) of gameplay driven by play.py into runs/<name>/.
 #   PKG         Eden package (default: the official "Optimized" build)
-#   TITLE       title ID (default: Zelda Echoes of Wisdom); base/<TITLE>.ini is pulled from the device once
+#   TITLE       title ID (default: Zelda Echoes of Wisdom); base/<PKG>/<TITLE>.ini is pulled from the device once
 #   LAUNCH_URI  boot a ROM from the package's own DocumentProvider instead of its library
 #   TURBO=1     pin the GPU clock during the measurement
+#   MODE        play (default), walk or none: see measure.sh
 A=~/Library/Android/sdk/platform-tools/adb
 D=${0:A:h}
 NAME=$1; shift
@@ -16,7 +17,7 @@ OUT=$D/runs/$NAME
 export PKG=${PKG:-com.miHoYo.Yuanshen}
 TITLE=${TITLE:-01008CF01BAAC000}
 F=/storage/emulated/0/Android/data/$PKG/files
-mkdir -p $OUT $D/base || exit 1
+mkdir -p $OUT $D/base/$PKG || exit 1
 # Never send input unless Eden's emulation window has focus (a locked screen once sent it to Settings).
 focused() { $A shell dumpsys window | grep mCurrentFocus | grep -q "$PKG/org.yuzu.yuzu_emu.activities.EmulationActivity"; }
 pad() { focused || { echo "ABORT: Eden not focused" | tee $OUT/summary.txt; $A shell input keyevent KEYCODE_HOME; exit 1; }; $A shell sh /data/local/tmp/pad.sh "$@"; }
@@ -34,8 +35,8 @@ $A shell am force-stop $PKG
 # A killed Eden leaves the kgsl turbo state behind; start every run from normal DCVS.
 $A shell /data/local/tmp/kgslturbo 0
 for i in $(seq 45); do [ $($A shell cat /sys/class/kgsl/kgsl-3d0/temp | tr -d '\r') -lt 42000 ] && break; sleep 2; done
-[ -f $D/base/$TITLE.ini ] || $A pull $F/config/custom/$TITLE.ini $D/base/$TITLE.ini >/dev/null || exit 1
-python3 -I $D/setini.py $D/base/$TITLE.ini $OUT/game.ini "$@" || { echo "ABORT: ini"; exit 1; }
+[ -f $D/base/$PKG/$TITLE.ini ] || $A pull $F/config/custom/$TITLE.ini $D/base/$PKG/$TITLE.ini >/dev/null || exit 1
+python3 -I $D/setini.py $D/base/$PKG/$TITLE.ini $OUT/game.ini "$@" || { echo "ABORT: ini"; exit 1; }
 $A push $OUT/game.ini $F/config/custom/$TITLE.ini >/dev/null
 unlock
 $A logcat -c
@@ -62,7 +63,11 @@ pad btn a 150; sleep 4
 pad btn up 150; sleep 1
 pad btn a 150; sleep 30
 shot ingame
+# A load that went wrong leaves a black playfield: the bot would idle and the numbers mean nothing.
+python3 -I -c "import sys; from PIL import Image, ImageStat
+sys.exit(ImageStat.Stat(Image.open(sys.argv[1]).convert('L').crop((0, 100, 900, 506))).mean[0] < 5)" $OUT/ingame.png ||
+  { echo "ABORT: black screen after loading the save" | tee $OUT/summary.txt; exit 1; }
 [ "$TURBO" = 1 ] && $A shell /data/local/tmp/kgslturbo 1
-$D/measure.sh $OUT 60 | tee $OUT/summary.txt
+$D/measure.sh $OUT ${DUR:-90} ${MODE:-play} | tee $OUT/summary.txt
 shot end
 $A shell /data/local/tmp/kgslturbo 0

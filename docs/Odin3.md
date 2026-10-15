@@ -7,7 +7,9 @@ Note locale (branche odin3, non upstream). Matériel visé : AYN Odin 3, Snapdra
 - Ni Docker ni l'émulateur Android de ce Mac n'ont d'Adreno ni de pilote Qualcomm : ils ne valident que la compilation et le démarrage. Le seul banc valable est l'Odin 3 via adb (USB, ou Wi-Fi avec `adb pair`/`adb connect`), `adb` étant dans `~/Library/Android/sdk/platform-tools`.
 - Build et variantes : `src/android/AGENTS.md`. Pour profiler, `relWithDebInfo` est débogable et s'installe à côté de l'officielle (suffixe de package), mais le suffixe annule le nom de package spoofé de « Optimized » : comparer aussi avec la build officielle.
 - Ne jamais désinstaller la build officielle pour installer la nôtre sans sauvegarde : la clé de signature diffère et la désinstallation efface les données.
-- Banc automatisé : `tools/odin3/run_variant.sh <nom> [Section.clé=valeur ...]` relance le jeu avec ces réglages par jeu, charge la sauvegarde à la manette virtuelle (`pad.sh`), fait marcher Link 60 s et écrit dans `tools/odin3/runs/<nom>/summary.txt` : fps hôte (timestamps SurfaceFlinger), part d'images lentes, puissance batterie, fréquences, températures et %CPU par thread. Il refuse d'envoyer une entrée si Eden n'a pas le focus.
+- Banc automatisé : `tools/odin3/run_variant.sh <nom> [Section.clé=valeur ...]` relance le jeu avec ces réglages par jeu, charge la sauvegarde à la manette virtuelle (`pad.sh`), fait jouer `play.py` 90 s (`DUR`, `MODE=walk` pour l'aller-retour de `walk.sh`, `MODE=none` sans entrée) et écrit dans `tools/odin3/runs/<nom>/summary.txt` : fps hôte (timestamps SurfaceFlinger), part d'images lentes, puissance, fréquences, températures et %CPU par thread. Il refuse d'envoyer une entrée si Eden n'a pas le focus.
+- `play.py` (Mac : ffmpeg, numpy, Pillow) joue vraiment : il suit Link à sa capuche bleue dans un flux `screenrecord` 480×270, explore en préférant les directions qui mènent à des vues nouvelles, frappe ce qui bouge près de Link, tire des flèches, lance des bombes, ferme les dialogues et l'écran de game over. Journal `play.log` et une image toutes les 10 s dans `frames/`. Ne jamais utiliser `screencap` pendant une mesure : chaque capture bloque SurfaceFlinger et fait tomber le jeu de 60 à 37 fps ; le flux garde 60 fps pour environ 0,7 W constant, donc ne comparer que des runs du même `MODE`.
+- Sur chargeur, la batterie reçoit ce que l'appareil laisse de l'entrée USB : `summarize.py` affiche alors entrée USB moins charge batterie. Les pertes du chargeur ne sont pas comptées, ce chiffre sert à comparer des runs, pas à les comparer aux mesures sur batterie.
 - Dossier utilisateur : `getExternalFilesDir(null)` (`src/android/app/src/main/java/org/yuzu/yuzu_emu/utils/DirectoryInitialization.kt:42`), soit `/storage/emulated/0/Android/data/<package>/files/`. On y trouve `config/custom/<TITLEID>.ini` (réglages par jeu), `shader/<titleid>/` (caches) et `log/`.
 
 ## 1. Mesurer avant de toucher
@@ -82,5 +84,16 @@ Côté code, deux pistes :
 
 - v0.2.1 officielle, réglages d'origine (turbo actif, précision GPU High) : 30,0 fps, 10,3 W, CPU à 105 °C.
 - Même build sans turbo : 55,5 fps, 6,6 W. Précision GPU Low et GPU asynchrone ne changent rien (55-56 fps, 6,4-6,7 W).
-- Les 8 % d'images lentes restants arrivent par salves d'exactement 12 images à 30 fps : le jeu passe 0,4 s en 30 fps après chaque image en retard.
-- Build de cette branche (`relWithDebInfo`) : 58,2 fps et 2,7 % d'images lentes avec turbo ; 59,3 fps et 1,2 % sans turbo, mais 9,5 W contre 6,4 W pour la v0.2.1. Cet écart de consommation reste à expliquer (changements upstream ou perte du profil pilote liée au suffixe de package).
+- Les 8 % d'images lentes restants arrivent par salves d'exactement 12 images à 30 fps. C'est le jeu qui le décide : après une image en retard, il passe son swap interval de 1 à 2 pendant 24 vsyncs (0,4 s).
+- Build de cette branche (`relWithDebInfo`) : 58,2 fps et 2,7 % d'images lentes avec turbo ; 59,3 fps et 1,2 % sans turbo, mais 9,5 W contre 6,4 W pour la v0.2.1.
+
+Le même jour, avec `play.py` pendant 90 s sur chargeur et la build `relWithDebInfo` (chiffres comparables entre eux seulement) :
+
+- HEAD : 60,0 fps, 0 % d'images lentes, 6,66 W sur deux runs identiques. Le CPU 0 tourne à 3,4 GHz pour 40 % d'occupation.
+- Sessions ADPF gardées mais sans rapport de durée : 59,3-59,5 fps, 1,0-1,3 %, 5,64-5,81 W. Sans ADPF du tout : 59,2-59,7 fps, 0,4-1,3 %, 5,53-5,54 W.
+- Cause : `ReportFrameInterval` rapportait l'intervalle entre deux vsyncs comme durée de travail. Cet intervalle vaut la cible par construction, et le double pendant les salves à 30 fps : il ne descend jamais en dessous, donc le service de hints relève sans fin le plancher des CPU.
+- Rapport retiré (`src/common/adpf.h`) : 59,5-59,8 fps, 0,5-0,8 %, 5,31-5,57 W. Soit environ −1,2 W (−18 %) pour deux ou trois salves de 12 images de plus toutes les 90 s.
+- `async_presentation`, actif par défaut depuis #4509, n'y est pour rien : coupé, 59,5 fps et 6,92 W.
+- GPU synchrone (`use_asynchronous_gpu_emulation=false`, valeur de l'INI global de la v0.2.1) : 40 fps seulement sur cette branche, alors que la v0.2.1 tenait 55 fps en marchant avec ce réglage. Avec tous les réglages de la v0.2.1, la branche reste à 30,0 fps (4,38 W, GPU occupé à 22 % comme la v0.2.1). Régression à chercher.
+- Le GPU reste à 660 MHz dans tous ces runs : son occupation (35-40 % contre 22 %) suit le nombre d'images et le GPU asynchrone, pas l'écart de puissance.
+- La v0.2.1 n'a pas pu être remesurée : elle affiche désormais un monde noir après le chargement (HUD seul, 30 fps), même avec son cache de shaders écarté ou le GPU asynchrone forcé. Le profil pilote lié au suffixe de package n'a donc pas été mesuré.

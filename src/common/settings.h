@@ -292,6 +292,15 @@ struct Values {
                                            true,
                                            &use_custom_cpu_ticks};
 
+    // How long an idle guest core watches for work before its host thread sleeps, in microseconds.
+    SwitchableSetting<u32, true> cpu_idle_spin_us{linkage,
+#ifdef __ANDROID__
+                                                  200,
+#else
+                                                  0,
+#endif
+                                                  0, 1000, "cpu_idle_spin_us", Category::Cpu};
+
     Setting<bool> cpuopt_page_tables{linkage, true, "cpuopt_page_tables", Category::CpuDebug};
     Setting<bool> cpuopt_block_linking{linkage, true, "cpuopt_block_linking", Category::CpuDebug};
     Setting<bool> cpuopt_return_stack_buffer{linkage, true, "cpuopt_return_stack_buffer",
@@ -513,6 +522,8 @@ struct Values {
                                                       true};
 
     GpuAccuracy current_gpu_accuracy{GpuAccuracy::High};
+    // Set by Core::GameSettings::LoadOverrides for the running title, never saved.
+    bool title_unsafe_dma{false};
 
     SwitchableSetting<DmaAccuracy, true> dma_accuracy{linkage,
                                                       DmaAccuracy::Default,

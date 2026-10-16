@@ -4,6 +4,8 @@
 // SPDX-FileCopyrightText: Copyright 2020 yuzu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <chrono>
+
 #include "common/scope_exit.h"
 #include "common/settings.h"
 #include "core/core.h"
@@ -222,8 +224,17 @@ void PhysicalCore::LogBacktrace(KernelCore& kernel) {
 }
 
 void PhysicalCore::Idle() {
+    // Game threads on different cores hand work to each other a few tens of microseconds apart. Sleeping on every
+    // handoff costs a host wake-up each time and lets the core clock down, so watch the flag briefly first.
+    const auto spin_end =
+        std::chrono::steady_clock::now() + std::chrono::microseconds{Settings::values.cpu_idle_spin_us.GetValue()};
+    while (!m_is_interrupted.load(std::memory_order_acquire) && std::chrono::steady_clock::now() < spin_end) {
+#if defined(__aarch64__)
+        asm volatile("yield");
+#endif
+    }
     std::unique_lock lk{m_guard};
-    m_on_interrupt.wait(lk, [this] { return m_is_interrupted; });
+    m_on_interrupt.wait(lk, [this] { return m_is_interrupted.load(); });
 }
 
 bool PhysicalCore::IsInterrupted() const {

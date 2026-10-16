@@ -122,9 +122,16 @@ EnvironmentInfo DetectEnvironment(const VideoCore::RendererBase& renderer) {
 void LoadOverrides(std::uint64_t program_id, const VideoCore::RendererBase& renderer) {
     const auto env = DetectEnvironment(renderer);
 
+    Settings::values.title_unsafe_dma = false;
     switch (static_cast<TitleID>(program_id)) {
         case TitleID::NinjaGaidenRagebound:
             Settings::values.use_squashed_iterated_blend = true;
+            break;
+        case TitleID::ZeldaEchoesOfWisdom:
+            // At High accuracy its command lists are read safely, which downloads GPU-written memory found in them
+            // and waits for the whole GPU, about twice a frame: the game takes the late frames for a slow machine
+            // and drops to 30 fps. Its command lists never need that flush.
+            Settings::values.title_unsafe_dma = true;
             break;
         default:
             break;

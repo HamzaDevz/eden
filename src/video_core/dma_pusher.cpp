@@ -83,7 +83,8 @@ bool DmaPusher::Step() {
                 subchannels[dma_state.subchannel]->current_dirty = memory_manager.IsMemoryDirty(dma_state.dma_get, words * sizeof(u32));
             }
         }
-        const bool use_safe = Settings::IsDMALevelDefault() ? Settings::IsGPULevelHigh() : Settings::IsDMALevelSafe();
+        const bool use_safe = Settings::IsDMALevelDefault() ? Settings::IsGPULevelHigh() && !Settings::values.title_unsafe_dma
+                                                         : Settings::IsDMALevelSafe();
         if (use_safe) {
             Tegra::Memory::GpuGuestMemory<Tegra::CommandHeader, Tegra::Memory::GuestMemoryFlags::SafeRead>headers(memory_manager, dma_state.dma_get, header.size, &command_headers);
             ProcessCommands(headers);

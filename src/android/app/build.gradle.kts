@@ -161,7 +161,7 @@ android {
                 "proguard-rules.pro"
             )
 
-            manifestPlaceholders += mapOf("appNameSuffix" to " Debug Release")
+            manifestPlaceholders += mapOf("appNameBase" to "EdenHome", "appNameSuffix" to "")
 
             versionNameSuffix = "-relWithDebInfo"
             applicationIdSuffix = ".relWithDebInfo"

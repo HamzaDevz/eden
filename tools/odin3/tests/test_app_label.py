@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
 # SPDX-License-Identifier: GPL-3.0-or-later
 
-# Our Odin 3 build sits next to the official app on the console: its launcher label tells them apart.
+# Our Odin 3 build is the only Eden left on the console: it keeps the emulator's plain name.
 import glob
 import os
 import re
@@ -18,9 +18,9 @@ def badging():
                           check=True).stdout
 
 
-def test_our_build_is_labelled_edenodin3():
-    assert re.search(r"^application-label:'EdenOdin3'$", badging(), re.M)
+def test_our_build_is_labelled_eden():
+    assert re.search(r"^application-label:'Eden'$", badging(), re.M)
 
 
-def test_our_build_keeps_its_own_package_next_to_the_official_app():
+def test_our_build_keeps_its_own_package_and_signature_slot():
     assert re.search(r"^package: name='com\.miHoYo\.Yuanshen\.relWithDebInfo'", badging(), re.M)

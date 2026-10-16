@@ -161,7 +161,7 @@ android {
                 "proguard-rules.pro"
             )
 
-            manifestPlaceholders += mapOf("appNameBase" to "EdenHome", "appNameSuffix" to "")
+            manifestPlaceholders += mapOf("appNameBase" to "EdenOdin3", "appNameSuffix" to "")
 
             versionNameSuffix = "-relWithDebInfo"
             applicationIdSuffix = ".relWithDebInfo"

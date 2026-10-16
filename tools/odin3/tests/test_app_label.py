@@ -18,8 +18,8 @@ def badging():
                           check=True).stdout
 
 
-def test_our_build_is_labelled_edenhome():
-    assert re.search(r"^application-label:'EdenHome'$", badging(), re.M)
+def test_our_build_is_labelled_edenodin3():
+    assert re.search(r"^application-label:'EdenOdin3'$", badging(), re.M)
 
 
 def test_our_build_keeps_its_own_package_next_to_the_official_app():

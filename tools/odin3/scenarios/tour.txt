@@ -1,0 +1,218 @@
+# Tour d'Hyrule, environ 6 min, sauvegarde 100 % : la Citadelle (place, maison, château, salle du trône),
+# puis des téléportations vers le désert Gerudo (ville, maison, combat en mode épéiste), la tourbière de Firone
+# (jungle, sauts, écho), le sommet d'Hébra (grotte, neige), le volcan d'Ordinn (carrière de lave) et La Zora
+# (nage, plongée). Chaque téléportation recale la route : le curseur de la carte s'aimante sur le point visé.
+save eow-citadelle
+
+mark citadelle
+walk w 1.4
+walk n 10                     # le pont, puis la fontaine arrête Zelda
+check fontaine
+walk e 1.15
+walk n until dark max 4       # maison à l'est de la fontaine
+wait light max 10
+wait 1
+check maison
+walk n 1
+walk ne 0.8
+walk sw 0.8
+walk s until dark max 4
+wait light max 10
+wait 1
+walk s 0.5
+walk e 3                      # bute contre le chemin de ronde
+walk n 6                      # puis contre un arbre
+walk w 0.5
+walk n 1.5
+walk w 3
+walk w 0.6                    # l'avenue du château
+walk n 8
+walk w 0.15
+walk n until dark max 4
+wait light max 10
+wait 1
+check chateau
+
+mark chateau
+walk n 14                     # deux salles, jusqu'au roi
+press a
+wait 2
+check roi
+mash b 8
+wait 1
+walk s until dark max 25
+wait light max 10
+wait 1
+walk s 6
+
+mark tp_gerudo
+press minus
+wait 2.5
+rstick s 1.2
+wait 0.8
+walk 233 1.07
+wait 0.8
+press a
+wait 1.2
+press a
+wait dark max 6
+wait light max 20
+wait 4
+check gerudo
+
+mark gerudo
+walk w 2
+walk e 0.25
+walk n 7
+door n max 8
+wait light max 10
+wait 1
+check maison_gerudo
+walk n 0.8
+walk s until dark max 3
+wait light max 10
+wait 1
+walk s 8
+
+mark combat
+press y                       # écho
+wait 1.5
+press up                      # mode épéiste : Y épée, X arc, A bombe
+wait 1
+repeat 3
+walk w 0.5
+press y 60 x3
+press x 100
+walk e 0.5
+hold y 1.3
+end
+press a 100
+walk n 1
+wait 2
+press b
+wait 7
+
+mark tp_firone
+press minus
+wait 2.5
+rstick s 1.2
+wait 0.8
+walk 92 1.88
+wait 0.8
+press a
+wait 1.2
+press a
+wait dark max 6
+wait light max 20
+wait 4
+check firone
+
+mark firone
+walk se 0.5
+stick e
+repeat 4
+press b
+wait 0.6
+end
+wait 1
+stick 0
+walk w 0.15
+press y
+wait 4
+walk s 1
+walk e 4
+
+mark tp_hebra
+press minus
+wait 2.5
+rstick s 1.2
+wait 0.8
+walk 330 1.6
+wait 0.8
+press a
+wait 1.2
+press a
+wait dark max 6
+wait light max 20
+wait 4
+check hebra
+
+mark hebra
+walk w 0.1
+walk n until dark max 4
+wait light max 10
+wait 1
+check grotte
+walk n 1.2
+walk e 1.2
+walk w 1.2
+walk s until dark max 4
+wait light max 10
+wait 1
+walk s 1
+stick e
+repeat 4
+press b
+wait 0.7
+end
+stick 0
+wait 2
+
+mark tp_volcan
+press minus
+wait 2.5
+rstick s 1.2
+wait 0.8
+walk 256 1.25
+wait 0.8
+press a
+wait 1.2
+press a
+wait dark max 6
+wait light max 20
+wait 4
+check volcan
+
+mark volcan
+walk n 2                      # bute contre la statue
+walk w 0.7
+walk n until dark max 4
+wait light max 10
+wait 1
+check carriere
+walk n 1.5
+walk e 1.5
+walk w 3
+walk e 1.5
+walk n 1.5
+walk s until dark max 6
+wait light max 10
+wait 1
+
+mark tp_zora
+press minus
+wait 2.5
+rstick s 1.2
+wait 0.8
+walk 96 1.86
+wait 0.8
+press a
+wait 1.2
+press a
+wait dark max 6
+wait light max 20
+wait 4
+check zora
+
+mark zora
+walk s 1
+walk w 2
+press a                       # plonge
+wait 0.5
+walk s 2
+walk e 2
+press b
+wait 1
+walk n 1.5
+walk w 3
+check fin

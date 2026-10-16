@@ -9,15 +9,35 @@
 # Anything moving near Link that is not flickering in place is treated as an enemy: Link turns to it
 # and swings. Also charges spin attacks, shoots arrows, throws bombs, and clears text boxes and the
 # game over screen. Logs one line per step to play.log and keeps a frame every 10 s in frames/.
-import os, random, subprocess, sys, threading, time
+#
+# With SCENARIO=<file>, plays that scenario instead: the same route through the game on every run, from the
+# save run_variant.sh restores (<seconds> is then only a safety limit). One step per line, "#" comments:
+#   walk <dir> <s>                    left stick for <s> s; dir is n, ne, e... or a bearing in degrees
+#   walk <dir> until <cond> [max <s>] cond: dark, light, text, notext, still (picture stopped), moving
+#   door <dir> [max <s>]              walks into a door until the screen goes dark, sidestepping a little
+#                                     further each way while it does not (doors are narrower than the drift)
+#   stick <dir>|0                     leaves the stick there while the next steps run
+#   rstick <dir> <s>                  right stick: camera, map zoom (s = out)
+#   press <btn> [ms] [xN]             a b x y l r zl zr plus minus up down left right
+#   hold <btn> <s>
+#   mash <btn> <s>                    one press every 0.3 s: dialogue, cutscenes
+#   wait <s> | wait <cond> [max <s>]
+#   auto <s>                          the autonomous player above
+#   mark <segment>                    starts a segment; summarize.py reports each one
+#   check <name> [min]                compares the picture with the one an AUTHOR=1 run saved
+#   repeat <n> ... end
+# A wait that times out or a check below <min> (default 0.5) is logged as DIVERGED: the run left the route.
+import os, random, re, subprocess, sys, threading, time
 import numpy as np
 from PIL import Image
 
 ADB = [os.path.expanduser("~/Library/Android/sdk/platform-tools/adb")]
 PKG = os.environ.get("PKG", "com.miHoYo.Yuanshen")
 EV = "/dev/input/event8"
-KEYS = {"a": 304, "b": 305, "x": 307, "y": 308, "l": 310, "r": 311, "zl": 312, "zr": 313}
+KEYS = {"a": 304, "b": 305, "x": 307, "y": 308, "l": 310, "r": 311, "zl": 312, "zr": 313, "minus": 314, "plus": 315}
+HAT = {"up": (17, -1), "down": (17, 1), "left": (16, -1), "right": (16, 1)}
 DIRS = [(1, 0), (1, 1), (0, 1), (-1, 1), (-1, 0), (-1, -1), (0, -1), (1, -1)]  # y > 0 is down
+BEARING = {"n": 0, "ne": 45, "e": 90, "se": 135, "s": 180, "sw": 225, "w": 270, "nw": 315}
 
 dur, out = float(sys.argv[1]), sys.argv[2]
 rng = random.Random(int(sys.argv[3]) if len(sys.argv) > 3 else 1)
@@ -31,19 +51,35 @@ def send(s):
     sh.stdin.flush()
 
 
-def stick(d):
-    x, y = (int(c * 32767 / (1.414 if d[0] and d[1] else 1)) for c in d)
-    send(f"sendevent {EV} 3 0 {x}; sendevent {EV} 3 1 {y}; sendevent {EV} 0 0 0")
+def stick_event(d, axes=(0, 1)):
+    n = max(1.0, float(np.hypot(*d)))
+    x, y = (int(c / n * 32767) for c in d)
+    return f"sendevent {EV} 3 {axes[0]} {x}; sendevent {EV} 3 {axes[1]} {y}; sendevent {EV} 0 0 0"
+
+
+def stick(d, axes=(0, 1)):
+    send(stick_event(d, axes))
+
+
+def timed(on, seconds, off):
+    """Holds an input for exactly <seconds>: the device times it, not the link (WiFi adb jitters by 100 ms or more)."""
+    send(f"{on}; usleep {int(seconds * 1e6)}; {off}")
+    time.sleep(seconds)
+
+
+def event(name, down):
+    if name in HAT:
+        axis, v = HAT[name]
+        return f"sendevent {EV} 3 {axis} {v if down else 0}; sendevent {EV} 0 0 0"
+    return f"sendevent {EV} 1 {KEYS[name]} {int(down)}; sendevent {EV} 0 0 0"
 
 
 def key(name, down):
-    send(f"sendevent {EV} 1 {KEYS[name]} {int(down)}; sendevent {EV} 0 0 0")
+    send(event(name, down))
 
 
 def press(name, ms=80):
-    k = KEYS[name]
-    send(f"sendevent {EV} 1 {k} 1; sendevent {EV} 0 0 0; usleep {ms * 1000}; "
-         f"sendevent {EV} 1 {k} 0; sendevent {EV} 0 0 0")
+    send(f"{event(name, True)}; usleep {ms * 1000}; {event(name, False)}")
 
 
 def focused():
@@ -52,26 +88,32 @@ def focused():
 
 
 class Screen(threading.Thread):
-    """Keeps the latest frame of the stream; screenrecord stops after 180 s, so restart it."""
+    """Keeps the latest frame of the stream, restarting screenrecord if it dies."""
 
     def __init__(self):
         super().__init__(daemon=True)
         self.frame, self.procs, self.done = None, [], False
+        self.times = []  # arrival of every frame, so glitch.py can place what it finds in stream.h264
         self.start()
 
     def run(self):
         size = 480 * 270 * 3
         while not self.done:
-            rec = subprocess.Popen(ADB + ["exec-out", "screenrecord --size 480x270 --bit-rate 1000000 "
+            # A screenrecord that stops on its own asks the media scanner to scan "-", which then keeps a prime core
+            # at 4.3 GHz for about a minute (12-18 W): no time limit, and only ever killed with SIGKILL.
+            rec = subprocess.Popen(ADB + ["exec-out", "screenrecord --time-limit 0 --size 480x270 --bit-rate 1000000 "
                                           "--output-format=h264 -"], stdout=subprocess.PIPE)
+            tee = subprocess.Popen(["tee", "-a", os.path.join(out, "stream.h264")], stdin=rec.stdout,
+                                   stdout=subprocess.PIPE)
             # No "-fflags nobuffer": it drops the probed keyframe and nothing decodes until the next one, 20 s later.
             dec = subprocess.Popen(["ffmpeg", "-v", "error", "-probesize", "32", "-analyzeduration", "0",
                                     "-flags", "low_delay", "-f", "h264", "-i", "-", "-fps_mode", "passthrough",
                                     "-f", "rawvideo", "-pix_fmt", "rgb24", "-"],
-                                   stdin=rec.stdout, stdout=subprocess.PIPE)
-            self.procs = [rec, dec]
+                                   stdin=tee.stdout, stdout=subprocess.PIPE)
+            self.procs = [rec, tee, dec]
             while len(b := dec.stdout.read(size)) == size:
                 self.frame = np.frombuffer(b, np.uint8).reshape(270, 480, 3)
+                self.times.append(time.monotonic())
             self.stop()
 
     def stop(self):
@@ -104,30 +146,24 @@ def toward(dx, dy):
     return int(round(np.arctan2(dy, dx) / (np.pi / 4))) % 8
 
 
-if not focused():
-    print("play.py: Eden is not focused, not sending input", file=sys.stderr)
-    sys.exit(1)
-
-screen = Screen()
-while screen.frame is None:
-    time.sleep(0.05)
-start = time.monotonic()
-heading, hold_until = rng.randrange(8), 0.0
-value = [0.5] * 8  # optimistic: untried headings look promising
-blocked = {}  # heading -> when it was last found blocked
-memory = []  # thumbnails of places seen
-flicker = np.zeros((135, 240))  # where the picture changes on its own (torches, water)
-prev = None
-swung, fights, calm_until, saved = 0.0, 0, 0.0, {}
-last_frame = last_focus = last_step = start
-next_swing, next_bow, next_bomb = start + 1.0, start + 6.0, start + 15.0
-try:
-    while time.monotonic() - start < dur:
+def autoplay(seconds, start):
+    """The autonomous player, for <seconds> s; logs times from <start>."""
+    t0 = time.monotonic()
+    heading, hold_until = rng.randrange(8), 0.0
+    value = [0.5] * 8  # optimistic: untried headings look promising
+    blocked = {}  # heading -> when it was last found blocked
+    memory = []  # thumbnails of places seen
+    flicker = np.zeros((135, 240))  # where the picture changes on its own (torches, water)
+    prev = None
+    swung, fights, calm_until, saved = 0.0, 0, 0.0, {}
+    last_frame = last_focus = last_step = t0
+    next_swing, next_bow, next_bomb = t0 + 1.0, t0 + 6.0, t0 + 15.0
+    while time.monotonic() - t0 < seconds:
         now = time.monotonic()
         if now - last_focus > 15:
             if not focused():
                 print("play.py: Eden lost focus, stopping", file=sys.stderr)
-                break
+                return False
             last_focus = now
         time.sleep(max(0.0, 0.4 - (now - last_step)))  # decide at most every 0.4 s
         last_step = now = time.monotonic()
@@ -228,12 +264,197 @@ try:
         log.write(f"{now - start:6.1f} {state:18s} h={heading} delta={delta:.3f} new={novelty:.2f} "
                   f"places={len(memory)} link={s['link']} enemy={enemy} hearts={s['hearts']} "
                   f"text={s['text']:.4f}\n")
+    stick((0, 0))
+    return True
+
+
+def parse(path):
+    stack = [[]]
+    for raw in open(path):
+        t = raw.split("#")[0].split()
+        if not t or t[0] == "save":
+            continue
+        if t[0] == "repeat":
+            stack[-1].append(("repeat", int(t[1]), []))
+            stack.append(stack[-1][-1][2])
+        elif t[0] == "end":
+            stack.pop()
+        else:
+            stack[-1].append(tuple(t))
+    return stack[0]
+
+
+def vec(d):
+    if d == "0":
+        return (0, 0)
+    a = np.radians(BEARING[d] if d in BEARING else float(d))
+    return (float(np.sin(a)), float(-np.cos(a)))
+
+
+def until(cond, limit):
+    """Waits for cond; still and moving need the picture to stay (un)changed for 0.5 s."""
+    end, prev, since = time.monotonic() + limit, None, time.monotonic()
+    while time.monotonic() < end:
+        s = look(screen.frame)
+        if cond in ("still", "moving"):
+            ok = prev is not None and (float((np.abs(prev - s["gray"]) > 25).mean()) < 0.01) == (cond == "still")
+            prev = s["gray"]
+            if not ok:
+                since = time.monotonic()
+            elif time.monotonic() - since > 0.5:
+                return True
+        elif {"dark": s["dark"], "light": not s["dark"], "text": s["text"] > 0.25,
+              "notext": s["text"] <= 0.25}[cond]:
+            return True
+        time.sleep(0.05)
+    return False
+
+
+def door(d, limit):
+    end, k = time.monotonic() + limit, 0
+    while time.monotonic() < end:
+        stick(d)
+        if until("dark", 1.0):
+            stick((0, 0))
+            return True
+        k += 1
+        sign = 1 if k % 2 else -1
+        stick((-d[1] * sign, d[0] * sign))
+        time.sleep(0.1 * k)
+    stick((0, 0))
+    return False
+
+
+class Route:
+    def __init__(self, path, start):
+        self.name = os.path.splitext(os.path.basename(path))[0]
+        self.refs = os.path.join(os.path.dirname(os.path.abspath(__file__)), "saves", "refs", self.name)
+        self.author = os.environ.get("AUTHOR") == "1"
+        os.makedirs(self.refs if self.author else os.path.join(out, "checks"), exist_ok=True)
+        self.start, self.diverged, self.checks = start, 0, []
+        self.segments, self.seg = open(os.path.join(out, "segments.csv"), "w"), None
+        # Device clocks: SurfaceFlinger stamps presents with CLOCK_MONOTONIC, poll.sh with /proc/uptime.
+        m = subprocess.run(ADB + ["shell", "dumpsys meminfo -c | head -2"], capture_output=True, text=True).stdout
+        up, real = (int(x) for x in re.search(r"time,(\d+),(\d+)", m).groups())
+        t0 = time.monotonic()
+        boot = float(subprocess.run(ADB + ["shell", "cat /proc/uptime"], capture_output=True, text=True).stdout.split()[0])
+        self.to_boot = boot - (t0 + time.monotonic()) / 2
+        self.mono_minus_boot = (up - real) / 1000
+        self.segments.write("segment,mono_start,mono_end,boot_start,boot_end\n")
+
+    def note(self, msg):
+        log.write(f"{time.monotonic() - self.start:6.1f} {msg}\n")
+        log.flush()
+
+    def close_segment(self):
+        if self.seg:
+            name, b0 = self.seg
+            b1 = time.monotonic() + self.to_boot
+            self.segments.write(f"{name},{b0 + self.mono_minus_boot:.3f},{b1 + self.mono_minus_boot:.3f},{b0:.3f},{b1:.3f}\n")
+            self.segments.flush()
+        self.seg = None
+
+    def miss(self, what):
+        self.diverged += 1
+        self.note(f"DIVERGED {what}")
+        Image.fromarray(screen.frame).save(os.path.join(out, "frames", f"diverged{self.diverged}.png"))
+
+    def run(self, steps):
+        for st in steps:
+            if time.monotonic() - self.start > dur:
+                return False
+            if st[0] == "repeat":
+                for _ in range(st[1]):
+                    if not self.run(st[2]):
+                        return False
+                continue
+            self.note(" ".join(st))
+            c, a = st[0], st[1:]
+            if c == "walk":
+                if a[1] == "until":
+                    stick(vec(a[0]))
+                    ok = until(a[2], float(a[4]) if len(a) > 4 else 10)
+                    stick((0, 0))
+                    if not ok:
+                        self.miss(" ".join(st))
+                else:
+                    timed(stick_event(vec(a[0])), float(a[1]), stick_event((0, 0)))
+            elif c == "door":
+                if not door(vec(a[0]), float(a[2]) if len(a) > 2 else 12):
+                    self.miss(" ".join(st))
+            elif c == "stick":
+                stick(vec(a[0]))
+            elif c == "rstick":
+                timed(stick_event(vec(a[0]), (2, 5)), float(a[1]), stick_event((0, 0), (2, 5)))
+            elif c == "press":
+                ms = int(a[1]) if len(a) > 1 and a[1].isdigit() else 80
+                n = int(a[-1][1:]) if a[-1].startswith("x") else 1
+                for _ in range(n):
+                    press(a[0], ms)
+                    time.sleep(ms / 1000 + 0.15)
+            elif c == "hold":
+                timed(event(a[0], True), float(a[1]), event(a[0], False))
+            elif c == "mash":
+                end = time.monotonic() + float(a[1])
+                while time.monotonic() < end:
+                    press(a[0])
+                    time.sleep(0.3)
+            elif c == "wait":
+                if re.fullmatch(r"[\d.]+", a[0]):
+                    time.sleep(float(a[0]))
+                elif not until(a[0], float(a[2]) if len(a) > 2 else 10):
+                    self.miss(" ".join(st))
+            elif c == "auto":
+                if not autoplay(float(a[0]), self.start):
+                    return False
+            elif c == "mark":
+                self.close_segment()
+                self.seg = (a[0], time.monotonic() + self.to_boot)
+            elif c == "check":
+                f, ref = screen.frame, os.path.join(self.refs, a[0] + ".png")
+                if self.author:
+                    Image.fromarray(f).save(ref)
+                elif os.path.exists(ref):
+                    Image.fromarray(f).save(os.path.join(out, "checks", a[0] + ".png"))
+                    r = look(np.asarray(Image.open(ref).convert("RGB")))["thumb"].ravel()
+                    sim = float(np.corrcoef(r, look(f)["thumb"].ravel())[0, 1])
+                    self.checks.append((a[0], sim))
+                    self.note(f"check {a[0]} {sim:.2f}")
+                    if sim < (float(a[1]) if len(a) > 1 else 0.5):
+                        self.miss(f"check {a[0]} {sim:.2f}")
+            else:
+                raise SystemExit(f"play.py: unknown step {st}")
+        return True
+
+
+if not focused():
+    print("play.py: Eden is not focused, not sending input", file=sys.stderr)
+    sys.exit(1)
+
+screen = Screen()
+while screen.frame is None:
+    time.sleep(0.05)
+start = time.monotonic()
+try:
+    if os.environ.get("SCENARIO"):
+        route = Route(os.environ["SCENARIO"], start)
+        done = route.run(parse(os.environ["SCENARIO"]))
+        route.close_segment()
+        ok = sum(1 for _, s in route.checks if s >= 0.5)
+        with open(os.path.join(out, "route.txt"), "w") as r:
+            r.write(f"route={route.name} finished={done} seconds={time.monotonic() - start:.0f} "
+                    f"diverged={route.diverged} checks={ok}/{len(route.checks)}\n")
+    else:
+        autoplay(dur, start)
 finally:
     screen.done = True
     screen.stop()
-    send("pkill screenrecord")
+    send("pkill -9 screenrecord")
+    with open(os.path.join(out, "stream.txt"), "w") as f:
+        f.writelines(f"{t - start:.3f}\n" for t in screen.times)
     stick((0, 0))
-    for k in KEYS:
+    stick((0, 0), (2, 5))
+    for k in list(KEYS) + list(HAT):
         key(k, False)
     sh.stdin.close()
     sh.wait(timeout=5)

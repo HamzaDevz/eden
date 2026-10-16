@@ -13,6 +13,7 @@
 #include "common/assert.h"
 #include "common/logging.h"
 #include "common/scope_exit.h"
+#include "common/trace.h"
 #include "core/core.h"
 #include "core/hle/kernel/k_event.h"
 #include "core/hle/service/nvdrv/core/container.h"
@@ -148,6 +149,7 @@ NvResult nvhost_ctrl::IocCtrlEventWait(IocCtrlEventWaitParams& params, bool is_a
     const auto check_failing = [&]() {
         if (events[slot].fails > 2) {
             {
+                TRACE_SCOPE("StallWaitHost");
                 auto lk = system.StallApplication();
                 host1x_syncpoint_manager.WaitHost(fence_id, target_value);
                 system.UnstallApplication();
@@ -198,8 +200,11 @@ NvResult nvhost_ctrl::IocCtrlEventWait(IocCtrlEventWaitParams& params, bool is_a
     }
     params.value.raw |= slot;
 
+    // How long the game waits for the GPU, from the guest's side.
+    TRACE_ASYNC_BEGIN("SyncptWait", static_cast<s32>(slot));
     event.wait_handle =
         host1x_syncpoint_manager.RegisterHostAction(fence_id, target_value, [this, slot]() {
+            TRACE_ASYNC_END("SyncptWait", static_cast<s32>(slot));
             auto& event_ = events[slot];
             if (event_.status.exchange(EventState::Signalling, std::memory_order_acq_rel) ==
                 EventState::Waiting) {

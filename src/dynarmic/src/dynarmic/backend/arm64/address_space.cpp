@@ -10,6 +10,10 @@
 
 #include <bit>
 
+#ifdef __ANDROID__
+#include <android/trace.h>
+#endif
+
 #include "dynarmic/backend/arm64/a64_address_space.h"
 #include "dynarmic/backend/arm64/a64_jitstate.h"
 #include "dynarmic/backend/arm64/abi.h"
@@ -70,8 +74,19 @@ CodePtr AddressSpace::GetOrEmit(IR::LocationDescriptor descriptor) {
     if (CodePtr block_entry = Get(descriptor)) {
         return block_entry;
     }
+#ifdef __ANDROID__
+    const bool trace = ATrace_isEnabled();
+    if (trace) {
+        ATrace_beginSection("JitEmit");
+    }
+#endif
     GenerateIR(ir_block, descriptor);
     const EmittedBlockInfo block_info = Emit(std::move(ir_block));
+#ifdef __ANDROID__
+    if (trace) {
+        ATrace_endSection();
+    }
+#endif
     return block_info.entry_point;
 }
 

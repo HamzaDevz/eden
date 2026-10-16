@@ -9,6 +9,7 @@
 #include "common/adpf.h"
 #include "common/settings.h"
 #include "common/thread.h"
+#include "common/trace.h"
 #include "core/core.h"
 #include "core/core_timing.h"
 #include "core/hle/service/vi/conductor.h"
@@ -74,6 +75,7 @@ void Conductor::UnlinkVsyncEvent(u64 display_id, Event* event) {
 }
 
 void Conductor::ProcessVsync() {
+    TRACE_SCOPE("Vsync");
     Common::PollThreadPolicies();
     Common::ADPF::SetTargetWorkDuration(std::chrono::nanoseconds{this->GetFramePeriodNs()});
 

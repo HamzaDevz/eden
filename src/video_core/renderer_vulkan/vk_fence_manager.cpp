@@ -9,6 +9,7 @@
 #include "video_core/renderer_vulkan/vk_scheduler.h"
 #include "video_core/renderer_vulkan/vk_texture_cache.h"
 #include "video_core/vulkan_common/vulkan_device.h"
+#include "common/trace.h"
 
 namespace Vulkan {
 
@@ -59,6 +60,7 @@ bool FenceManager::IsFenceSignaled(Fence& fence) const {
 }
 
 void FenceManager::WaitFence(Fence& fence) {
+    TRACE_SCOPE("FenceWait");
     fence->Wait();
 }
 

@@ -18,6 +18,7 @@
 #include "common/common_types.h"
 #include "common/settings.h"
 #include "common/thread.h"
+#include "common/trace.h"
 #include "video_core/delayed_destruction_ring.h"
 #include "video_core/gpu.h"
 #include "video_core/host1x/host1x.h"
@@ -108,6 +109,7 @@ public:
     }
 
     void WaitPendingFences([[maybe_unused]] bool force) {
+        TRACE_SCOPE("WaitPendingFences");
         if constexpr (!can_async_check) {
             TryReleasePendingFences<true>();
         } else {

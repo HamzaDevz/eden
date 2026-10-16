@@ -7,6 +7,7 @@
 #include <cstring>
 #include "common/assert.h"
 #include "common/logging.h"
+#include "common/trace.h"
 #include "core/core.h"
 #include "core/hle/kernel/k_process.h"
 #include "core/hle/service/nvdrv/core/container.h"
@@ -339,6 +340,7 @@ static boost::container::small_vector<Tegra::CommandHeader, 512> BuildIncrementW
 }
 
 NvResult nvhost_gpu::SubmitGPFIFOImpl(IoctlSubmitGpfifo& params, Tegra::CommandList&& entries) {
+    TRACE_SCOPE("SubmitGPFIFO");
     LOG_TRACE(Service_NVDRV, "called, gpfifo={:X}, num_entries={:X}, flags={:X}", params.address,
               params.num_entries, params.flags.raw);
 

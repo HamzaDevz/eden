@@ -11,6 +11,7 @@
 #include <numeric>
 
 #include "common/range_sets.inc"
+#include "common/trace.h"
 #include "video_core/buffer_cache/buffer_cache_base.h"
 #include "video_core/guest_memory.h"
 #include "video_core/host1x/gpu_device_memory_manager.h"
@@ -671,6 +672,7 @@ void BufferCache<P>::CommitAsyncFlushesHigh() {
 
 template <class P>
 void BufferCache<P>::CommitAsyncFlushes() {
+    TRACE_SCOPE("BufAsyncFlushes");
     CommitAsyncFlushesHigh();
 }
 
@@ -1904,6 +1906,10 @@ void BufferCache<P>::DownloadBufferMemory(Buffer& buffer, DAddr device_addr, u64
     if (total_size_bytes == 0) {
         return;
     }
+    TRACE_SCOPE("BufDownload");
+#ifdef __ANDROID__
+    Common::LogCallers("BufDownload");
+#endif
 
     if constexpr (USE_MEMORY_MAPS) {
         auto download_staging = runtime.DownloadStagingBuffer(total_size_bytes);

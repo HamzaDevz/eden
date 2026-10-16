@@ -8,6 +8,7 @@
 #include "common/scope_exit.h"
 #include "common/settings.h"
 #include "common/thread.h"
+#include "common/trace.h"
 #include "core/core.h"
 #include "core/frontend/graphics_context.h"
 #include "video_core/control/scheduler.h"
@@ -41,10 +42,12 @@ void ThreadManager::StartThread(VideoCore::RendererBase& renderer, Core::Fronten
                 break;
             }
             if (auto* submit_list = std::get_if<SubmitListCommand>(&next.data)) {
+                TRACE_SCOPE("GpuCommandList");
                 scheduler.Push(system.GPU(), submit_list->channel, std::move(submit_list->entries));
             } else if (std::holds_alternative<GPUTickCommand>(next.data)) {
                 system.GPU().TickWork();
             } else if (const auto* flush = std::get_if<FlushRegionCommand>(&next.data)) {
+                TRACE_SCOPE("GpuFlushRegion");
                 renderer.ReadRasterizer()->FlushRegion(flush->addr, flush->size);
             } else if (const auto* invalidate = std::get_if<InvalidateRegionCommand>(&next.data)) {
                 renderer.ReadRasterizer()->OnCacheInvalidation(invalidate->addr, invalidate->size);

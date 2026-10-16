@@ -14,6 +14,7 @@
 #include "core/hle/service/nvnflinger/hardware_composer.h"
 #include "core/hle/service/nvnflinger/hwc_layer.h"
 #include "core/hle/service/nvnflinger/ui/graphic_buffer.h"
+#include "common/trace.h"
 
 namespace Service::Nvnflinger {
 
@@ -48,6 +49,7 @@ HardwareComposer::~HardwareComposer() = default;
 
 u32 HardwareComposer::ComposeLocked(f32* out_speed_scale, Display& display,
                                     Nvidia::Devices::nvdisp_disp0& nvdisp) {
+    TRACE_SCOPE("Compose");
 #if BOOST_VERSION >= 108100 || __GNUC__ > 12
     boost::container::small_vector<HwcLayer, 2> composition_stack;
 #else //TODO: debian stable

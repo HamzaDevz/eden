@@ -128,6 +128,7 @@ add_library(
     time_zone.cpp
     time_zone.h
     tiny_mt.h
+    trace.h
     tree.h
     typed_address.h
     uint128.h

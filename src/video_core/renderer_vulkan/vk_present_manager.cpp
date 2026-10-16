@@ -6,6 +6,7 @@
 
 #include "common/settings.h"
 #include "common/thread.h"
+#include "common/trace.h"
 #include "core/frontend/emu_window.h"
 #ifdef HAS_LSFG
 #include "video_core/renderer_vulkan/present/lsfg_common.h"
@@ -187,6 +188,7 @@ Frame* PresentManager::GetRenderFrame() {
 }
 
 void PresentManager::Present(Frame* frame) {
+    TRACE_SCOPE("Present");
     if (use_present_thread) {
         scheduler.Record([this, frame](vk::CommandBuffer) {
             std::unique_lock lock{queue_mutex};
@@ -424,6 +426,7 @@ void PresentManager::CopyToSwapchain(Frame* frame) {
 }
 
 void PresentManager::CopyToSwapchainImpl(Frame* frame) {
+    TRACE_SCOPE("CopyToSwapchain");
 
     // If the size of the incoming frames has changed, recreate the swapchain
     // to account for that.

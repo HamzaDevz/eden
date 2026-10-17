@@ -12,6 +12,7 @@
 
 #include <boost/icl/interval_map.hpp>
 #include <boost/icl/interval_set.hpp>
+#include <boost/container/flat_set.hpp>
 #include "common/container/unordered_map.h"
 #include "common/container/unordered_set.h"
 
@@ -25,7 +26,7 @@ public:
     void AddRange(boost::icl::discrete_interval<P> range, IR::LocationDescriptor location);
     void ClearCache();
     ::Common::unordered_set<IR::LocationDescriptor> InvalidateRanges(const boost::icl::interval_set<P>& ranges);
-    boost::icl::interval_map<P, ::Common::unordered_set<IR::LocationDescriptor>> block_ranges;
+    boost::icl::interval_map<P, boost::container::flat_set<IR::LocationDescriptor>> block_ranges;
 };
 
 }  // namespace Dynarmic::Backend

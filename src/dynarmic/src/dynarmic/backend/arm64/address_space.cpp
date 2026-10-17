@@ -285,7 +285,7 @@ void AddressSpace::Link(EmittedBlockInfo& block_info) {
         }
     }
 
-    for (auto [target_descriptor, list] : block_info.block_relocations) {
+    for (const auto& [target_descriptor, list] : block_info.block_relocations) {
         block_references[target_descriptor].insert(block_info.entry_point);
         LinkBlockLinks(block_info.entry_point, Get(target_descriptor), list);
     }
@@ -321,7 +321,11 @@ void AddressSpace::LinkBlockLinks(const CodePtr entry_point, const CodePtr targe
 }
 
 void AddressSpace::RelinkForDescriptor(IR::LocationDescriptor target_descriptor, CodePtr target_ptr) {
-    for (auto code_ptr : block_references[target_descriptor]) {
+    const auto references = block_references.find(target_descriptor);
+    if (references == block_references.end()) {
+        return;
+    }
+    for (auto code_ptr : references->second) {
         if (auto block_iter = block_infos.find(code_ptr); block_iter != block_infos.end()) {
             const EmittedBlockInfo& block_info = block_iter->second;
 

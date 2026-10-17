@@ -13,6 +13,7 @@ N=$($A shell cat $F/config/config.ini | tr -d '\r' | sed -n 's/^nand_directory=/
 S=${N:-$F/nand}/user/save/0000000000000000/F87F57BFCE6345060247FB61C12F5AE7/$TITLE
 case $1 in
   pull) rm -rf $D/saves/$2 && mkdir -p $D/saves && $A pull $S $D/saves/$2 >/dev/null;;
-  push) [ -f $D/saves/$2/save.meta ] && $A shell rm -rf $S && $A push $D/saves/$2 $S >/dev/null;;
+  # adb creates the folders 770 shell:shell, which the app cannot open: the game then panics on its save.
+  push) [ -f $D/saves/$2/save.meta ] && $A shell rm -rf $S && $A push $D/saves/$2 $S >/dev/null && $A shell chmod -R 777 $S;;
   *) echo "usage: saves.sh pull|push <name>" >&2; exit 2;;
 esac

@@ -140,6 +140,20 @@ Shader::AttributeType CastAttributeType(const FixedPipelineState::VertexAttribut
     return Shader::AttributeType::Float;
 }
 
+// Static vertex input keys stay valid under VIDS for the draws that fall back to them.
+bool VertexInputMatches(const FixedPipelineState& state, const DynamicFeatures& features) {
+    if ((state.dynamic_vertex_input != 0) == features.has_dynamic_vertex_input) {
+        return true;
+    }
+    return features.has_dynamic_vertex_input && features.must_emulate_scaled_formats &&
+           std::ranges::any_of(state.attributes, [](const auto& attribute) {
+               const auto type = attribute.Type();
+               return attribute.enabled != 0 &&
+                      (type == Maxwell::VertexAttribute::Type::UScaled ||
+                       type == Maxwell::VertexAttribute::Type::SScaled);
+           });
+}
+
 Shader::AttributeType AttributeType(const FixedPipelineState& state, size_t index) {
     switch (state.DynamicAttributeType(index)) {
     case 0:
@@ -546,6 +560,7 @@ PipelineCache::PipelineCache(Tegra::MaxwellDeviceMemoryManager& device_memory_,
     dynamic_features.has_dynamic_vertex_input =
         device.IsExtVertexInputDynamicStateSupported() &&
         Settings::values.vertex_input_dynamic_state.GetValue();
+    dynamic_features.must_emulate_scaled_formats = device.MustEmulateScaledFormats();
 
     dynamic_features.has_provoking_vertex = device.IsExtProvokingVertexSupported();
     dynamic_features.has_provoking_vertex_first_mode =
@@ -558,6 +573,7 @@ PipelineCache::PipelineCache(Tegra::MaxwellDeviceMemoryManager& device_memory_,
 
 PipelineCache::~PipelineCache() {
     if (use_vulkan_pipeline_cache && !vulkan_pipeline_cache_filename.empty()) {
+        serialization_thread.WaitForRequests();
         SerializeVulkanPipelineCache(vulkan_pipeline_cache_filename, vulkan_pipeline_cache,
                                      CACHE_VERSION);
     }
@@ -674,8 +690,7 @@ void PipelineCache::LoadDiskResources(u64 title_id, std::stop_token stop_loading
                 dynamic_features.has_extended_dynamic_state_3_enables ||
             (key.state.color_write_enable_dynamic != 0) !=
                 dynamic_features.has_color_write_enable ||
-            (key.state.dynamic_vertex_input != 0) !=
-                dynamic_features.has_dynamic_vertex_input) {
+            !VertexInputMatches(key.state, dynamic_features)) {
             return;
         }
 
@@ -1041,35 +1056,46 @@ std::unique_ptr<ComputePipeline> PipelineCache::CreateComputePipeline(
 
 void PipelineCache::SerializeVulkanPipelineCache(const std::filesystem::path& filename,
                                                  const vk::PipelineCache& pipeline_cache,
-                                                 u32 cache_version) try {
-    std::ofstream file(filename, std::ios::binary);
-    file.exceptions(std::ifstream::failbit);
-    if (!file.is_open()) {
-        LOG_ERROR(Common_Filesystem, "Failed to open Vulkan driver pipeline cache file {}",
-                  Common::FS::PathToUTF8String(filename));
+                                                 u32 cache_version) {
+    // Written aside then renamed: a process killed mid-write must not leave a truncated blob,
+    // the Qualcomm driver crashes on one in vkCreatePipelineCache at every boot.
+    auto temp_filename{filename};
+    temp_filename += ".tmp";
+    try {
+        std::ofstream file(temp_filename, std::ios::binary);
+        file.exceptions(std::ifstream::failbit);
+        if (!file.is_open()) {
+            LOG_ERROR(Common_Filesystem, "Failed to open Vulkan driver pipeline cache file {}",
+                      Common::FS::PathToUTF8String(temp_filename));
+            return;
+        }
+        file.write(VULKAN_CACHE_MAGIC_NUMBER.data(), VULKAN_CACHE_MAGIC_NUMBER.size())
+            .write(reinterpret_cast<const char*>(&cache_version), sizeof(cache_version));
+
+        size_t cache_size = 0;
+        std::vector<char> cache_data;
+        if (pipeline_cache) {
+            pipeline_cache.Read(&cache_size, nullptr);
+            cache_data.resize(cache_size);
+            pipeline_cache.Read(&cache_size, cache_data.data());
+        }
+        file.write(cache_data.data(), cache_size);
+        file.close();
+    } catch (const std::ios_base::failure& e) {
+        LOG_ERROR(Common_Filesystem, "{}", e.what());
+        Common::FS::RemoveFile(temp_filename);
         return;
     }
-    file.write(VULKAN_CACHE_MAGIC_NUMBER.data(), VULKAN_CACHE_MAGIC_NUMBER.size())
-        .write(reinterpret_cast<const char*>(&cache_version), sizeof(cache_version));
-
-    size_t cache_size = 0;
-    std::vector<char> cache_data;
-    if (pipeline_cache) {
-        pipeline_cache.Read(&cache_size, nullptr);
-        cache_data.resize(cache_size);
-        pipeline_cache.Read(&cache_size, cache_data.data());
+    std::error_code ec;
+    std::filesystem::rename(temp_filename, filename, ec);
+    if (ec) {
+        LOG_ERROR(Common_Filesystem, "Failed to replace Vulkan driver pipeline cache file {}: {}",
+                  Common::FS::PathToUTF8String(filename), ec.message());
+        Common::FS::RemoveFile(temp_filename);
+        return;
     }
-    file.write(cache_data.data(), cache_size);
-
     LOG_INFO(Render_Vulkan, "Vulkan driver pipelines cached at: {}",
              Common::FS::PathToUTF8String(filename));
-
-} catch (const std::ios_base::failure& e) {
-    LOG_ERROR(Common_Filesystem, "{}", e.what());
-    if (!Common::FS::RemoveFile(filename)) {
-        LOG_ERROR(Common_Filesystem, "Failed to delete Vulkan driver pipeline cache file {}",
-                  Common::FS::PathToUTF8String(filename));
-    }
 }
 
 vk::PipelineCache PipelineCache::LoadVulkanPipelineCache(const std::filesystem::path& filename,

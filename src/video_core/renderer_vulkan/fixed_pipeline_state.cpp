@@ -88,6 +88,14 @@ bool ComputeAttachment0DualSourceBlend(const Maxwell& regs) {
                                          : uses_dual_source(regs.blend);
 }
 
+bool HasScaledAttribute(const Maxwell& regs) {
+    return std::ranges::any_of(regs.vertex_attrib_format, [](const auto& attribute) {
+        const auto type = attribute.type.Value();
+        return attribute.constant == 0 && (type == Maxwell::VertexAttribute::Type::UScaled ||
+                                           type == Maxwell::VertexAttribute::Type::SScaled);
+    });
+}
+
 void RefreshXfbState(VideoCommon::TransformFeedbackState& state, const Maxwell& regs) {
     std::ranges::transform(regs.transform_feedback.controls, state.layouts.begin(),
                            [](const auto& layout) {
@@ -108,6 +116,13 @@ void FixedPipelineState::Refresh(Tegra::Engines::Maxwell3D& maxwell3d, DynamicFe
     driver_id = features.driver_id;
     driver_version = features.driver_version;
 
+    // Dynamic attribute types only tell the shader float, sint or uint: emulated scaled formats
+    // need the static vertex input path, which keeps the attribute type in the key.
+    const bool was_dynamic_vertex_input = dynamic_vertex_input != 0;
+    const bool use_dynamic_vertex_input =
+        features.has_dynamic_vertex_input &&
+        !(features.must_emulate_scaled_formats && HasScaledAttribute(regs));
+
     raw1 = 0;
     extended_dynamic_state.Assign(features.has_extended_dynamic_state ? 1 : 0);
     extended_dynamic_state_2.Assign(features.has_extended_dynamic_state_2 ? 1 : 0);
@@ -115,7 +130,7 @@ void FixedPipelineState::Refresh(Tegra::Engines::Maxwell3D& maxwell3d, DynamicFe
     extended_dynamic_state_3_blend.Assign(features.has_extended_dynamic_state_3_blend ? 1 : 0);
     extended_dynamic_state_3_enables.Assign(features.has_extended_dynamic_state_3_enables ? 1 : 0);
     color_write_enable_dynamic.Assign(features.has_color_write_enable ? 1 : 0);
-    dynamic_vertex_input.Assign(features.has_dynamic_vertex_input ? 1 : 0);
+    dynamic_vertex_input.Assign(use_dynamic_vertex_input ? 1 : 0);
     xfb_enabled.Assign(regs.transform_feedback_enabled != 0);
     ndc_minus_one_to_one.Assign(regs.depth_mode == Maxwell::DepthMode::MinusOneToOne ? 1 : 0);
     polygon_mode.Assign(PackPolygonMode(regs.polygon_mode_front));
@@ -182,8 +197,9 @@ void FixedPipelineState::Refresh(Tegra::Engines::Maxwell3D& maxwell3d, DynamicFe
     alpha_test_ref = std::bit_cast<u32>(regs.alpha_test_ref);
     point_size = std::bit_cast<u32>(regs.point_size);
 
-    if (maxwell3d.dirty.flags[Dirty::VertexInput]) {
-        if (features.has_dynamic_vertex_input) {
+    if (maxwell3d.dirty.flags[Dirty::VertexInput] ||
+        use_dynamic_vertex_input != was_dynamic_vertex_input) {
+        if (use_dynamic_vertex_input) {
             // Dirty flag will be reset by the command buffer update
             static constexpr std::array LUT{
                 0u, // Invalid

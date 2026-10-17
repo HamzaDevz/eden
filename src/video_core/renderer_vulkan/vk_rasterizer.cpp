@@ -1140,6 +1140,10 @@ void RasterizerVulkan::UpdateDynamicStates() {
     if (device.IsExtVertexInputDynamicStateSupported()) {
         if (auto* gp = pipeline_cache.CurrentGraphicsPipeline(); gp && gp->HasDynamicVertexInput()) {
             UpdateVertexInput(regs);
+        } else if (gp) {
+            // A static vertex input pipeline invalidates the dynamic one: set it again on the
+            // next pipeline that uses it.
+            maxwell3d->dirty.flags[Dirty::VertexInput] = true;
         }
     }
 }

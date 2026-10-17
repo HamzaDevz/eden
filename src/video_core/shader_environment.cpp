@@ -656,21 +656,36 @@ void LoadPipelines(
         }
         return;
     }
-    while (file.tellg() != end) {
-        if (stop_loading.stop_requested()) {
-            return;
+    std::streamoff last_record_end{file.tellg()};
+    try {
+        while (file.tellg() != end) {
+            if (stop_loading.stop_requested()) {
+                return;
+            }
+            u32 num_envs{};
+            file.read(reinterpret_cast<char*>(&num_envs), sizeof(num_envs));
+            std::vector<FileEnvironment> envs(num_envs);
+            for (FileEnvironment& env : envs) {
+                env.Deserialize(file);
+            }
+            if (envs.front().ShaderStage() == Shader::Stage::Compute) {
+                load_compute(file, std::move(envs.front()));
+            } else {
+                load_graphics(file, std::move(envs));
+            }
+            last_record_end = file.tellg();
         }
-        u32 num_envs{};
-        file.read(reinterpret_cast<char*>(&num_envs), sizeof(num_envs));
-        std::vector<FileEnvironment> envs(num_envs);
-        for (FileEnvironment& env : envs) {
-            env.Deserialize(file);
+    } catch (const std::ios_base::failure&) {
+        // A process killed inside SerializePipeline leaves a partial last record: keep the
+        // pipelines before it instead of recompiling the whole game.
+        file.close();
+        std::error_code ec;
+        std::filesystem::resize_file(filename, static_cast<std::uintmax_t>(last_record_end), ec);
+        if (ec) {
+            throw;
         }
-        if (envs.front().ShaderStage() == Shader::Stage::Compute) {
-            load_compute(file, std::move(envs.front()));
-        } else {
-            load_graphics(file, std::move(envs));
-        }
+        LOG_WARNING(Common_Filesystem, "Pipeline cache truncated to {} bytes after a bad record",
+                    last_record_end);
     }
 
 } catch (const std::ios_base::failure& e) {

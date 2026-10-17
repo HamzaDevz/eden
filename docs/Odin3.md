@@ -80,6 +80,7 @@ Côté code, deux pistes :
 - Défaut imposé par Eden pour un titre : `GameSettings::LoadOverrides` (`src/core/game_settings.cpp:122-138`). Ajouter l'ID dans `TitleID` (`src/core/game_settings.h:46-48`) et conditionner sur `GPUVendor::Qualcomm`, déjà calculé (`game_settings.cpp:19-74`).
   - Piège : ce point s'exécute après la création du device et du cache de pipelines (`src/core/core.cpp:292` puis `:403`). Il ne sert qu'aux réglages lus au fil de l'eau.
   - Pour `dyna_state` ou l'async, il faudrait appliquer l'override avant `CreateGPU`.
+- Jeu plafonné à 30 fps par lui-même : un cheat Atmosphere dans `files/load/<TID>/<dossier>/cheats/<16 premiers hex du build ID de main>.txt` (`tools/odin3/cheats/`). Eden exécute toutes les entrées du fichier. Pour porter un cheat vers un autre build ID, dumper main par le stub GDB (`tools/odin3/gdbmem.py`) : `dump_nso` écrit des fichiers que adb ne peut pas lire. Vérifier ensuite que le jeu garde sa vitesse à 60 fps.
 - Contournement de pilote : `vulkan_device.cpp:522-583` pour les extensions et capacités, `Profile` (`vk_pipeline_cache.cpp:379-468`) pour les shaders. La génération Adreno n'est détectée nulle part en C++ ; seules la version du pilote (`vulkan_device.cpp:543-544`) et le nom du device sont disponibles.
 
 ## 7. Mesures Zelda EoW (2026-10-15, donjon, 60 s de marche)

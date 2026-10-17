@@ -298,11 +298,30 @@ struct Memory::Impl {
         });
     }
 
+    [[nodiscard]] bool IsContiguousSpan(const VAddr addr, const std::size_t size) const noexcept {
+        if (!AddressSpaceContains(*current_page_table, addr, size)) {
+            return false;
+        }
+        // Pages backed by one contiguous host range all store the same pointer (host base - vaddr)
+        const auto& entries = current_page_table->entries;
+        const u64 first_page = addr >> YUZU_PAGEBITS;
+        const u64 last_page = (addr + (std::max)(size, std::size_t{1}) - 1) >> YUZU_PAGEBITS;
+        const uintptr_t pointer = entries[first_page].Pointer(true);
+        if (pointer == 0) {
+            return false;
+        }
+        for (u64 page = first_page + 1; page <= last_page; ++page) {
+            if (entries[page].Pointer(true) != pointer) {
+                return false;
+            }
+        }
+        return true;
+    }
     [[nodiscard]] inline const u8* GetSpan(const VAddr addr, const std::size_t size) const noexcept {
-        return (current_page_table->entries[addr >> YUZU_PAGEBITS].Block() == current_page_table->entries[(addr + size) >> YUZU_PAGEBITS].Block()) ? GetPointerSilent(addr) : nullptr;
+        return IsContiguousSpan(addr, size) ? GetPointerSilent(addr) : nullptr;
     }
     [[nodiscard]] inline u8* GetSpan(const VAddr addr, const std::size_t size) noexcept {
-        return (current_page_table->entries[addr >> YUZU_PAGEBITS].Block() == current_page_table->entries[(addr + size) >> YUZU_PAGEBITS].Block()) ? GetPointerSilent(addr) : nullptr;
+        return IsContiguousSpan(addr, size) ? GetPointerSilent(addr) : nullptr;
     }
 
     bool WriteBlockImpl(const Common::ProcessAddress addr, const void* buffer, const std::size_t size, bool unsafe) {
@@ -547,15 +566,12 @@ struct Memory::Impl {
 
             page_table.entries.ZeroRegion(base, end);
         } else {
-            auto current_block = block_count.fetch_add(1, std::memory_order_relaxed);
-            ASSERT(current_block != 65535);
-
             page_table.entries.CommitRegion(base, end);
             while (base != end) {
                 auto host_ptr = reinterpret_cast<u64>(system.DeviceMemory().GetPointer<u8>(target)) - (base << YUZU_PAGEBITS);;
                 auto& entry = page_table.entries.GetUnchecked(base);
 
-                entry.Store(false, type, current_block, host_ptr);
+                entry.Store(false, type, 0, host_ptr);
                 ASSERT_MSG(page_table.entries[base].Pointer(),
                            "memory mapping base yield a nullptr within the table");
 
@@ -775,7 +791,6 @@ struct Memory::Impl {
 #else
     Common::HostMemory* host_buffer{};
 #endif
-    std::atomic<u16> block_count = 0;
 };
 
 Memory::Memory(Core::System& system_) : system{system_} {

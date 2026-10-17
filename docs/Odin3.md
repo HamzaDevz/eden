@@ -46,6 +46,7 @@ Ces réglages se changent par jeu, sans toucher au code, depuis Propriétés du 
 - `pipeline_worker_count` : 2 par défaut, plafonné à `min(cœurs-1, 8)` (`src/video_core/renderer_vulkan/vk_pipeline_cache.cpp:306-320`), soit jusqu'à 7 sur un 8 Elite. Il n'accélère que `vkCreateGraphicsPipelines` : la traduction Maxwell → SPIR-V reste sur le thread `GPU` (`vk_pipeline_cache.cpp:814-901`).
 - `use_asynchronous_shaders` saute les draws tant que leur pipeline n'est pas prêt (`vk_pipeline_cache.cpp:783-798`). Moins de saccades, mais des artefacts passagers.
 - `dyna_state` (EDS1 à EDS3) et `vertex_input_dynamic_state` sont désactivés par défaut sur tout Android (`src/common/settings.h:684-709`). Les activer réduit le nombre de variantes de pipelines. Le risque est un bug du pilote, ce qui explique le défaut ; c'est le premier essai à faire sur le pilote 8xx. Après un changement, une partie du cache disque est ignorée (`vk_pipeline_cache.cpp:664-690`).
+- Sur l'Adreno 830 (pilote système 512.800.72), `vertex_input_dynamic_state` est actif en global depuis le 2026-10-17 : les draws à attribut scaled repassent par une clé statique, sinon SMG2 perd son fond. EDS2 avec VIDS fait planter ce pilote. `tools/odin3/vkcache.py` fusionne les caches de plusieurs apps (`merge`), convertit les clés statiques en VIDS (`vids`) et additionne deux caches v18 (`combine`).
 - Laisser `use_disk_shader_cache` et `use_vulkan_driver_pipeline_cache` actifs. Ces deux réglages et l'async ne sont lus qu'au démarrage du jeu (`vk_pipeline_cache.cpp:354-355`).
 
 Côté code, deux pistes :

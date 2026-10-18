@@ -123,6 +123,7 @@ void LoadOverrides(std::uint64_t program_id, const VideoCore::RendererBase& rend
     const auto env = DetectEnvironment(renderer);
 
     Settings::values.title_unsafe_dma = false;
+    Settings::values.title_delay_fences = false;
     switch (static_cast<TitleID>(program_id)) {
         case TitleID::NinjaGaidenRagebound:
             Settings::values.use_squashed_iterated_blend = true;
@@ -132,6 +133,12 @@ void LoadOverrides(std::uint64_t program_id, const VideoCore::RendererBase& rend
             // and waits for the whole GPU, about twice a frame: the game takes the late frames for a slow machine
             // and drops to 30 fps. Its command lists never need that flush.
             Settings::values.title_unsafe_dma = true;
+            break;
+        case TitleID::SuperSmashBrosUltimate:
+            // At Low accuracy fence callbacks and query results are written as soon as the fence is queued, before
+            // the GPU has run the commands: the results screen reads them early and every other frame is black.
+            // Delaying them as High does fixes it without High's flushes.
+            Settings::values.title_delay_fences = true;
             break;
         default:
             break;

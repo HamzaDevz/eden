@@ -4,7 +4,7 @@
 # vkcache.py : lit les vulkan.bin d'Eden (cache transférable), convertit v11/v16/v17 en v18, fusionne,
 # passe des clés statiques en VIDS (les clés à attribut scaled restent statiques, repli Qualcomm).
 # Usage : vkcache.py stats <fichier>... | merge <sortie> <base v18> <autre>... | combine <sortie> <a> <b>
-#         | vids <sortie> <source v18> | eds2 <sortie> <source v18> [--logic-op]
+#         | vids <sortie> <source v18> | eds1 <sortie> <source v18> | eds2 <sortie> <source v18> [--logic-op]
 import struct, sys
 
 MAGIC = b"yuzucach"
@@ -143,6 +143,15 @@ def to_eds2(key, logic_op, eds=True):
     """Clé EDS désactivé -> clé EDS2 + VIDS (ou VIDS seul), comme FixedPipelineState::Refresh la produirait."""
     key = bytearray(key)
     (raw1,) = struct.unpack_from("<I", key, ST)
+    if eds == "eds1":
+        # EDS1 seul, sur une clé VIDS ou statique : cull, profondeur, stencil et face avant sortent de la clé,
+        # la topologie reste entière (le repli de classe exige EDS2), Refresh2 garde restart, bias et rasterize.
+        if raw1 & 0b11:
+            return bytes(key)
+        struct.pack_into("<I", key, ST, raw1 | 1)
+        (d1,) = struct.unpack_from("<I", key, ST + 72)
+        struct.pack_into("<II", key, ST + 72, d1 & ~0b111, 0)
+        return bytes(key)
     if raw1 & 0b100011:
         return bytes(key)  # déjà dynamique
     if not eds:
@@ -187,7 +196,8 @@ def eds2(out, src, logic_op, eds=True):
         if st != COMPUTE:
             (raw1,) = struct.unpack_from("<I", key, ST)
             assert not (raw1 >> 6) & 1, "xfb non géré"
-            dedup = key[:ST + 112]  # Size() = offsetof(attributes) avec VIDS sans EDS3 blend
+            # FixedPipelineState::Size() sans EDS3 blend : attributes avec VIDS, vertex_strides en EDS1, xfb_state sinon
+            dedup = key[:ST + (112 if (raw1 >> 5) & 1 else 368 if raw1 & 1 else 432)]
         else:
             dedup = key
         if dedup in seen:
@@ -222,6 +232,8 @@ if __name__ == "__main__":
         eds2(sys.argv[2], sys.argv[3], "--logic-op" in sys.argv)
     elif sys.argv[1] == "combine":
         combine(sys.argv[2], sys.argv[3], sys.argv[4])
+    elif sys.argv[1] == "eds1":
+        eds2(sys.argv[2], sys.argv[3], False, eds="eds1")
     elif sys.argv[1] == "vids":
         eds2(sys.argv[2], sys.argv[3], False, eds=False)
     else:

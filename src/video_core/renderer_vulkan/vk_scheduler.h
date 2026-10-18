@@ -68,6 +68,10 @@ public:
     /// Realizes any pending deferred clear before its framebuffer can be moved or freed.
     void FlushDeferredClear();
 
+    /// Realizes a clear deferred on this framebuffer before it is removed, or drops it when the caller
+    /// cannot record (service thread).
+    void ReleaseDeferredClear(const Framebuffer* framebuffer, bool can_record);
+
     /// Requests the current execution context to be able to execute operations only allowed outside
     /// of a renderpass.
     void RequestOutsideRenderPassOperationContext();

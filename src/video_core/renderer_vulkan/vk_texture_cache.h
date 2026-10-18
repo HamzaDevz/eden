@@ -62,6 +62,8 @@ public:
 
     void FlushDeferredClear();
 
+    void ReleaseDeferredClear(const Framebuffer& framebuffer, bool can_record);
+
     u64 GetDeviceLocalMemory() const;
 
     u64 GetDeviceMemoryUsage() const;

@@ -204,6 +204,18 @@ void Scheduler::FlushDeferredClear() {
     EndRenderPass();
 }
 
+void Scheduler::ReleaseDeferredClear(const Framebuffer* framebuffer, bool can_record) {
+    if (deferred_clear.framebuffer != framebuffer) {
+        return;
+    }
+    if (!can_record) {
+        deferred_clear = {};
+        return;
+    }
+    RealizeDeferredClear();
+    EndRenderPass();
+}
+
 void Scheduler::RequestRenderpass(const Framebuffer* framebuffer) {
     if (deferred_clear.framebuffer == framebuffer) {
         RealizeDeferredClear();

@@ -77,6 +77,8 @@ public:
 
     void FlushDeferredClear() {}
 
+    void ReleaseDeferredClear(const Framebuffer&, bool) {}
+
     StagingBufferMap UploadStagingBuffer(size_t size, bool deferred = false);
 
     StagingBufferMap DownloadStagingBuffer(size_t size, bool deferred = false);

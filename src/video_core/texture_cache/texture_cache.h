@@ -669,6 +669,7 @@ template <class P>
 void TextureCache<P>::UnmapMemory(DAddr cpu_addr, size_t size) {
     boost::container::small_vector<ImageId, 16> deleted_images;
     ForEachImageInRegion(cpu_addr, size, [&](ImageId id, Image&) { deleted_images.push_back(id); });
+    unmapping = true;
     for (const ImageId id : deleted_images) {
         Image& image = slot_images[id];
         if (True(image.flags & ImageFlagBits::Tracked)) {
@@ -677,6 +678,7 @@ void TextureCache<P>::UnmapMemory(DAddr cpu_addr, size_t size) {
         UnregisterImage(id);
         DeleteImage(id);
     }
+    unmapping = false;
 }
 
 template <class P>
@@ -2428,7 +2430,6 @@ void TextureCache<P>::RemoveImageViewReferences(std::span<const ImageViewId> rem
 
 template <class P>
 void TextureCache<P>::RemoveFramebuffers(std::span<const ImageViewId> removed_views) {
-    runtime.FlushDeferredClear();
     auto it = framebuffers.begin();
     while (it != framebuffers.end()) {
         if (it->first.Contains(removed_views)) {
@@ -2438,6 +2439,7 @@ void TextureCache<P>::RemoveFramebuffers(std::span<const ImageViewId> removed_vi
                 last_framebuffer_id = {};
                 last_framebuffer_serial = 0;
             }
+            runtime.ReleaseDeferredClear(slot_framebuffers[framebuffer_id], !unmapping);
             sentenced_framebuffers.Push(std::move(slot_framebuffers[framebuffer_id]));
             it = framebuffers.erase(it);
         } else {

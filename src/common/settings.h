@@ -524,6 +524,7 @@ struct Values {
     GpuAccuracy current_gpu_accuracy{GpuAccuracy::High};
     // Set by Core::GameSettings::LoadOverrides for the running title, never saved.
     bool title_unsafe_dma{false};
+    bool title_delay_fences{false};
 
     SwitchableSetting<DmaAccuracy, true> dma_accuracy{linkage,
                                                       DmaAccuracy::Default,

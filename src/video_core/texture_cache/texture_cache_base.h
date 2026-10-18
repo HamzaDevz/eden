@@ -441,6 +441,8 @@ private:
     bool last_feedback_loop_result = false;
     FramebufferId last_framebuffer_id{};
     u64 last_framebuffer_serial = 0;
+    // UnmapMemory runs on the service thread, which must not record into the scheduler
+    bool unmapping = false;
 
     ::Common::unordered_map<RenderTargets, FramebufferId> framebuffers;
     ::Common::unordered_map<u64, std::vector<ImageMapId>, Common::IdentityHash<u64>> page_table;

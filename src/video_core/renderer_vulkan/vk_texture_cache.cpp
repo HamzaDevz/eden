@@ -1818,6 +1818,10 @@ void TextureCacheRuntime::FlushDeferredClear() {
     scheduler.FlushDeferredClear();
 }
 
+void TextureCacheRuntime::ReleaseDeferredClear(const Framebuffer& framebuffer, bool can_record) {
+    scheduler.ReleaseDeferredClear(&framebuffer, can_record);
+}
+
 VkImage TextureCacheRuntime::AcquireMsaaScratchImage(const VkImageCreateInfo& image_ci) {
     const MsaaScratchKey key{
         .format = image_ci.format,

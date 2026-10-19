@@ -72,8 +72,12 @@ public:
         uncommitted_operations.emplace_back(std::move(func));
     }
 
-    void SignalFence(std::function<void()>&& func) {
-        const bool delay_fence = Settings::IsGPUFenceBehaviorDefault() ? Settings::IsGPULevelHigh() || Settings::values.title_delay_fences : Settings::IsGPUFenceBehaviorBalanced() || Settings::IsGPUFenceBehaviorAccurate();
+    void SignalFence(std::function<void()>&& func, bool apply_title_delay = false) {
+        const bool delay_fence = Settings::IsGPUFenceBehaviorDefault()
+                                    ? Settings::IsGPULevelHigh() ||
+                                          (Settings::values.title_delay_fences && apply_title_delay)
+                                    : Settings::IsGPUFenceBehaviorBalanced() ||
+                                          Settings::IsGPUFenceBehaviorAccurate();
         const bool should_flush = ShouldFlush();
         if constexpr (!can_async_check) {
             TryReleasePendingFences<false>();
@@ -105,7 +109,7 @@ public:
     void SignalSyncPoint(u32 value) {
         syncpoint_manager.IncrementGuest(value);
         std::function<void()> func([this, value] { syncpoint_manager.IncrementHost(value); });
-        SignalFence(std::move(func));
+        SignalFence(std::move(func), true);
     }
 
     void WaitPendingFences([[maybe_unused]] bool force) {
@@ -124,7 +128,7 @@ public:
                 wait_finished.store(true, std::memory_order_relaxed);
                 wait_cv.notify_all();
             });
-            SignalFence(std::move(func));
+            SignalFence(std::move(func), true);
             std::unique_lock lk(wait_mutex);
             wait_cv.wait(
                 lk, [&wait_finished] { return wait_finished.load(std::memory_order_relaxed); });

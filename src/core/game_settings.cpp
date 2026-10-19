@@ -135,9 +135,7 @@ void LoadOverrides(std::uint64_t program_id, const VideoCore::RendererBase& rend
             Settings::values.title_unsafe_dma = true;
             break;
         case TitleID::SuperSmashBrosUltimate:
-            // At Low accuracy fence callbacks and query results are written as soon as the fence is queued, before
-            // the GPU has run the commands: the results screen reads them early and every other frame is black.
-            // Delaying them as High does fixes it without High's flushes.
+            // Delay host syncpoints and forced drains while keeping Low's query reports immediate.
             Settings::values.title_delay_fences = true;
             break;
         default:

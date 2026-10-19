@@ -231,6 +231,10 @@ void Controller::Execute() {
         break;
     }
     case ControllerSupportMode::ShowControllerStrapGuide:
+        LOG_INFO(Service_HID,
+                 "Skipping the controller strap guide for the already connected controller");
+        ConfigurationComplete(true);
+        break;
     case ControllerSupportMode::ShowControllerFirmwareUpdate:
     case ControllerSupportMode::ShowControllerKeyRemappingForSystem:
         UNIMPLEMENTED_MSG("ControllerSupportMode={} is not implemented",

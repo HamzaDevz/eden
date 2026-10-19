@@ -39,6 +39,18 @@ static u64 MakeCbufKey(u32 index, u32 offset) {
     return (static_cast<u64>(index) << 32) | offset;
 }
 
+static Tegra::Texture::TICEntry NullTextureInfo() {
+    Tegra::Texture::TICEntry entry{};
+    entry.format.Assign(Tegra::Texture::TextureFormat::A8B8G8R8);
+    entry.r_type.Assign(Tegra::Texture::ComponentType::UNORM);
+    entry.g_type.Assign(Tegra::Texture::ComponentType::UNORM);
+    entry.b_type.Assign(Tegra::Texture::ComponentType::UNORM);
+    entry.a_type.Assign(Tegra::Texture::ComponentType::UNORM);
+    entry.texture_type.Assign(Tegra::Texture::TextureType::Texture2D);
+    entry.normalized_coords.Assign(1);
+    return entry;
+}
+
 static Shader::TextureType ConvertTextureType(const Tegra::Texture::TICEntry& entry) {
     switch (entry.texture_type) {
     case Tegra::Texture::TextureType::Texture1D:
@@ -284,10 +296,17 @@ std::optional<u64> GenericEnvironment::TryFindSize() {
 Tegra::Texture::TICEntry GenericEnvironment::ReadTextureInfo(GPUVAddr tic_addr, u32 tic_limit,
                                                              bool via_header_index, u32 raw) {
     const auto handle{Tegra::Texture::TexturePair(raw, via_header_index)};
-    ASSERT(handle.first <= tic_limit);
+    if (handle.first > tic_limit) {
+        LOG_DEBUG(Shader, "TIC index {} exceeds limit {}; using a null 2D texture", handle.first,
+                  tic_limit);
+        return NullTextureInfo();
+    }
     const GPUVAddr descriptor_addr{tic_addr + handle.first * sizeof(Tegra::Texture::TICEntry)};
     Tegra::Texture::TICEntry entry;
     gpu_memory->ReadBlock(descriptor_addr, &entry, sizeof(entry));
+    if (std::ranges::all_of(entry.raw, [](u64 value) { return value == 0; })) {
+        return NullTextureInfo();
+    }
     return entry;
 }
 

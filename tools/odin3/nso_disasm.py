@@ -14,9 +14,10 @@ from bridge import Bridge
 
 def main():
     d = json.load(open(sys.argv[1]))
-    base, syms = d["base"], d["syms"]
+    syms = d["syms"]
     b = Bridge()
     b.ask("stream 0", "ok")
+    base = int(b.ask("info", "info").split()[3].split("=")[1], 16)
     md = Cs(CS_ARCH_ARM64, CS_MODE_ARM)
     for key in sys.argv[2:]:
         if key.startswith("0x"):

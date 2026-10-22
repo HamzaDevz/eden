@@ -15,31 +15,49 @@ from bridge import Bridge
 
 FIGHTER_MANAGER = "main+0x52b94f8"  # lib::Singleton<app::FighterManager>::instance_
 
+ACC = (0x4160, 0x20)  # current fighter, then its BattleObjectModuleAccessor
+
 # name: (length, offsets after the entry pointer)
 FIELDS = {
     "id": (8, (0x4160, 0x8)),  # battle object id, fighter kind
     "info": (0x4c, (0xf8, 0x90)),  # is_operation_cpu at +2, stock count at +0x48
-    "pos": (0x80, (0x4160, 0x20, 0x38, 0x30)),  # PostureModule: x, y, z, lr at +0x7c
-    "dmg": (4, (0x4160, 0x20, 0xa8, 0x18, 0)),  # DamageModule: damage(0)
-    "status": (0x48, (0x4160, 0x20, 0x40, 0x98)),  # StatusModule: kind, situation at +0x44
-    "motion": (0xc, (0x4160, 0x20, 0x88, 0x68)),  # MotionModule: hash40 kind, frame
+    "pos": (0x80, (*ACC, 0x38, 0x30)),  # PostureModule: x, y, z, lr at +0x7c
+    "dmg": (4, (*ACC, 0xa8, 0x18, 0)),  # DamageModule: damage(0)
+    "status": (0x48, (*ACC, 0x40, 0x98)),  # StatusModule: kind, situation at +0x44
+    "motion": (0xc, (*ACC, 0x88, 0x68)),  # MotionModule: hash40 kind, frame
+    # ControlModule pad, also fed by the CPU: stick x, y, CONTROL_PAD_BUTTON bits at +0x6c
+    "ctrl": (0x70, (*ACC, 0x48, 0x110, 0x10)),
+    "slots": (0x8, (0x4150,)),  # fighters in the entry (Pokemon Trainer, Pyra/Mythra)
+    "slot": (1, (0x5918,)),  # current one, only slot 0 is read above
+}
+
+# WorkModule arrays (table 0 instance, 1 status): floats, ints (8-byte stride), flag words.
+WORK = {
+    "wf0": (0x1e0, (*ACC, 0x50, 0x18, 0, 0x10, 0)),
+    "wi0": (0x870, (*ACC, 0x50, 0x18, 0, 0x20, 0)),
+    "wb0": (0x24, (*ACC, 0x50, 0x18, 0, 0x30, 0)),
+    "wf1": (0xa0, (*ACC, 0x50, 0x18, 8, 0x10, 0)),
+    "wi1": (0x100, (*ACC, 0x50, 0x18, 8, 0x20, 0)),
+    "wb1": (0xc, (*ACC, 0x50, 0x18, 8, 0x30, 0)),
 }
 
 
 class Fighter:
     __slots__ = ("kind", "cpu", "stock", "x", "y", "lr", "damage", "status", "situation",
-                 "motion", "motion_frame")
+                 "motion", "motion_frame", "stick_x", "stick_y", "buttons", "slots", "slot")
 
     def __str__(self):
         return (f"kind {self.kind:#04x}{' cpu' if self.cpu else ''} stock {self.stock} "
                 f"x {self.x:8.2f} y {self.y:8.2f} lr {self.lr:+.0f} {self.damage:5.1f}% "
                 f"status {self.status:#x} sit {self.situation} "
-                f"motion {self.motion:#x}@{self.motion_frame:.1f}")
+                f"motion {self.motion:#x}@{self.motion_frame:.1f} "
+                f"pad {self.stick_x:+.2f},{self.stick_y:+.2f} {self.buttons:#x}")
 
 
-def watch_all(bridge, players):
+def watch_all(bridge, players, work=False):
+    fields = {**FIELDS, **WORK} if work else FIELDS
     for i in range(players):
-        for name, (length, offs) in FIELDS.items():
+        for name, (length, offs) in fields.items():
             chain = " ".join(f"{o:#x}" for o in (0, 0x20 + i * 8, *offs))
             bridge.ask(f"watch {i}{name} {length:#x} {FIGHTER_MANAGER} {chain}", "ok")
 
@@ -59,6 +77,9 @@ def parse(frame, players):
         f.status = struct.unpack_from("<i", w["status"])[0]
         f.situation = struct.unpack_from("<i", w["status"], 0x44)[0]
         f.motion, f.motion_frame = struct.unpack("<Qf", w["motion"])
+        f.stick_x, f.stick_y = struct.unpack_from("<ff", w["ctrl"])
+        f.buttons = struct.unpack_from("<I", w["ctrl"], 0x6c)[0]
+        f.slots, f.slot = struct.unpack("<Q", w["slots"])[0], w["slot"][0]
         fighters[i] = f
     return fighters
 

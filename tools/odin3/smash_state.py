@@ -14,8 +14,8 @@ import struct
 from bridge import Bridge
 
 FIGHTER_MANAGER = "main+0x52b94f8"  # lib::Singleton<app::FighterManager>::instance_
-# app::stage::get_stage_id(): u32 [[[[main+0x532a9d8]]+0x148]+8], Final Destination is 3,
-# Battlefield 310
+# app::stage::get_stage_id(): u32 [[[[main+0x532a9d8]]+0x148]+8], Battlefield is 0, Final
+# Destination 3
 STAGE_WATCH = "watch stage 4 main+0x532a9d8 0 0x148 8"
 # Static player table, one 0x260 entry per slot in FighterManager entry order: name tag in
 # UTF-16 at +0x28 (10 characters), empty for CPUs.

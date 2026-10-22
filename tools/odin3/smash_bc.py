@@ -24,7 +24,7 @@ KINDS, STATUSES, MOTIONS = 128, 1024, 8192
 BINS = 9  # stick values -1 .. 1 by 0.25
 BUTTON_BITS = (0, 1, 2, 3)  # CONTROL_PAD_BUTTON attack, special, jump, guard
 CONT = 2 * 10 + 2  # per fighter continuous features, then the relative position
-STAGES = (3, 310)  # Final Destination, Battlefield
+STAGES = (0, 3)  # Battlefield, Final Destination
 
 
 def fighter_features(d, i, sign):

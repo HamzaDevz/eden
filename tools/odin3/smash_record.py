@@ -101,6 +101,7 @@ def main():
     out, path, frames, gaps, last, me = None, None, 0, 0, None, None
     matches, press_until, next_press, pressed, flags = 0, 0, -PRESS_EVERY, 0, None
     starts, steps, picker = 0, [], None  # + presses on this character select, PICK in progress
+    quiet, quiet_until = set(), 0  # slots the agent played, their last input still shows a while
     try:
         for line in b.frames(raw=True):
             f = Frame(line)
@@ -151,7 +152,7 @@ def main():
                     for i, ag in active.items():
                         ag.reset()
                         b.release(i)
-                    active = {}
+                    quiet, quiet_until, active = set(active), f.index + PRESS_EVERY, {}
                     fighters = smash_state.parse(f, a.players)
                     stage = f.watches.get("stage")
                     log(f"saved {frames} frames, {gaps} gaps, "
@@ -179,7 +180,8 @@ def main():
             # show up a little late, so their buttons are ignored for a while.
             ours = pressed if f.index < next_press + PRESS_EVERY else 0
             touched = {i: hex(p[0]) for i, p in f.pads.items()
-                       if p[0] & ~ours and i not in active and i != picker}
+                       if p[0] & ~ours and i not in active and i != picker
+                       and not (i in quiet and f.index < quiet_until)}
             if touched:
                 log(f"controller input from someone else {touched}, stopping")
                 return

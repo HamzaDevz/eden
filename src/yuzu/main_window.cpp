@@ -157,6 +157,7 @@ static FileSys::VirtualFile VfsDirectoryCreateFileWrapper(const FileSys::Virtual
 // Input //
 #include "hid_core/frontend/emulated_controller.h"
 #include "hid_core/hid_core.h"
+#include "input_common/drivers/tas_input.h"
 #include "input_common/drivers/virtual_amiibo.h"
 
 // Video Core //
@@ -1805,6 +1806,11 @@ bool MainWindow::LoadROM(const QString& filename, Service::AM::FrontendAppletPar
         return false;
 
     /** Exec */
+    QtCommon::system->SetGameBridgePadSink(
+        [input = input_subsystem](std::size_t player, u64 buttons, float lx, float ly, float rx,
+                                  float ry) {
+            input->GetTas()->SetLiveInput(player, buttons, {lx, ly}, {rx, ry});
+        });
     const Core::SystemResultStatus result{
         QtCommon::system->Load(*render_window, filename.toStdString(), params)};
 

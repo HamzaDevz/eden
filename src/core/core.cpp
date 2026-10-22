@@ -60,6 +60,7 @@
 #include "core/perf_stats.h"
 #include "core/reporter.h"
 #include "core/tools/freezer.h"
+#include "core/tools/game_bridge.h"
 #include "core/tools/renderdoc.h"
 #include "hid_core/hid_core.h"
 #include "network/network.h"
@@ -359,6 +360,12 @@ struct System::Impl {
         // Make the process created be the application
         kernel.SetApplicationProcess(process->GetHandle());
 
+        // Before the services exist, so the display never sees it change.
+        if (Settings::values.use_game_bridge) {
+            game_bridge = std::make_unique<Tools::GameBridge>(
+                system, Settings::values.game_bridge_port.GetValue(), game_bridge_pad_sink);
+        }
+
         // Set up the rest of the system.
         SystemResultStatus init_result{SetupForApplicationProcess(system, emu_window)};
         if (init_result != SystemResultStatus::Success) {
@@ -432,6 +439,7 @@ struct System::Impl {
         kernel.ShutdownCores();
         services.reset();
         service_manager.reset();
+        game_bridge.reset();
         fs_controller.Reset();
         cheat_engine.reset();
         core_timing.ClearPendingEvents();
@@ -507,6 +515,8 @@ struct System::Impl {
     std::optional<Memory::CheatEngine> cheat_engine;
     std::optional<Tools::Freezer> memory_freezer;
     std::optional<Tools::RenderdocAPI> renderdoc_api;
+    std::unique_ptr<Tools::GameBridge> game_bridge;
+    Tools::GameBridgePadSink game_bridge_pad_sink;
     std::optional<Tegra::GPU> gpu_core;
 
     std::array<Core::GPUDirtyMemoryManager, Core::Hardware::NUM_CPU_CORES> gpu_dirty_memory_managers;
@@ -949,6 +959,15 @@ const Core::Debugger& System::GetDebugger() const {
 
 Tools::RenderdocAPI& System::GetRenderdocAPI() {
     return *impl->renderdoc_api;
+}
+
+void System::SetGameBridgePadSink(
+    std::function<void(std::size_t, u64, float, float, float, float)> pad_sink) {
+    impl->game_bridge_pad_sink = std::move(pad_sink);
+}
+
+Tools::GameBridge* System::GetGameBridge() {
+    return impl->game_bridge.get();
 }
 
 void System::RunServer(std::unique_ptr<Service::ServerManager>&& server_manager) {

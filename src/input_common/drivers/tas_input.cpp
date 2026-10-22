@@ -234,6 +234,25 @@ void Tas::UpdateThread() {
     }
 }
 
+void Tas::SetLiveInput(size_t player_index, u64 buttons, TasAnalog left_axis,
+                       TasAnalog right_axis) {
+    if (player_index >= PLAYER_NUMBER) {
+        return;
+    }
+    const PadIdentifier identifier{
+        .guid = Common::UUID{},
+        .port = player_index,
+        .pad = 0,
+    };
+    for (std::size_t i = 0; i < sizeof(buttons) * 8; ++i) {
+        SetButton(identifier, static_cast<int>(i), (buttons & (1ULL << i)) != 0);
+    }
+    SetTasAxis(identifier, TasAxis::StickX, left_axis.x);
+    SetTasAxis(identifier, TasAxis::StickY, left_axis.y);
+    SetTasAxis(identifier, TasAxis::SubstickX, right_axis.x);
+    SetTasAxis(identifier, TasAxis::SubstickY, right_axis.y);
+}
+
 void Tas::ClearInput() {
     ResetButtonState();
     ResetAnalogState();

@@ -1162,6 +1162,8 @@ add_library(core STATIC
     reporter.h
     tools/freezer.cpp
     tools/freezer.h
+    tools/game_bridge.cpp
+    tools/game_bridge.h
     tools/renderdoc.cpp
     tools/renderdoc.h)
 

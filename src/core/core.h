@@ -110,6 +110,7 @@ class HIDCore;
 }
 
 namespace Tools {
+class GameBridge;
 class RenderdocAPI;
 }
 
@@ -381,6 +382,13 @@ public:
     [[nodiscard]] const Core::Debugger& GetDebugger() const;
 
     [[nodiscard]] Tools::RenderdocAPI& GetRenderdocAPI();
+
+    /// How the game bridge drives a player; set by the frontend before Load.
+    void SetGameBridgePadSink(
+        std::function<void(std::size_t, u64, float, float, float, float)> pad_sink);
+
+    /// The game bridge of the running application, or nullptr when use_game_bridge is off.
+    [[nodiscard]] Tools::GameBridge* GetGameBridge();
 
     void SetExitLocked(bool locked);
     bool GetExitLocked() const;

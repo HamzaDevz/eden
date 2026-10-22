@@ -882,6 +882,8 @@ struct Values {
     bool record_frame_times;
     Setting<bool> use_gdbstub{linkage, false, "use_gdbstub", Category::Debugging};
     Setting<u16> gdbstub_port{linkage, 6543, "gdbstub_port", Category::Debugging};
+    Setting<bool> use_game_bridge{linkage, false, "use_game_bridge", Category::Debugging};
+    Setting<u16> game_bridge_port{linkage, 6560, "game_bridge_port", Category::Debugging};
     SwitchableSetting<std::string> program_args{linkage,
                                                 std::string(),
                                                 "program_args",

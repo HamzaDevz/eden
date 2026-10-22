@@ -14,6 +14,7 @@
 #include "core/hle/service/nvdrv/core/nvmap.h"
 #include "core/hle/service/nvdrv/devices/nvdisp_disp0.h"
 #include "core/perf_stats.h"
+#include "core/tools/game_bridge.h"
 #include "video_core/gpu.h"
 
 namespace Service::Nvidia::Devices {
@@ -90,6 +91,9 @@ void nvdisp_disp0::Composite(std::span<const Nvnflinger::HwcLayer> sorted_layers
     system.SpeedLimiter().DoSpeedLimiting(system.CoreTiming().GetGlobalTimeUs());
     system.GetPerfStats().EndSystemFrame();
     system.GetPerfStats().BeginSystemFrame();
+    if (auto* game_bridge = system.GetGameBridge()) {
+        game_bridge->OnFrame();
+    }
 }
 
 void nvdisp_disp0::WaitForComposite() {

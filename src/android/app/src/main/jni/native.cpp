@@ -90,6 +90,7 @@ extern "C" {
 #include "hid_core/frontend/emulated_controller.h"
 #include "hid_core/hid_core.h"
 #include "hid_core/hid_types.h"
+#include "input_common/drivers/tas_input.h"
 #include "input_common/drivers/virtual_amiibo.h"
 #include "jni/native.h"
 #include "video_core/frame_gen/lossless_dll.h"
@@ -331,6 +332,10 @@ Core::SystemResultStatus EmulationSession::InitializeEmulation(const std::string
                 : -1,
     };
 
+    m_system.SetGameBridgePadSink([this](std::size_t player, u64 buttons, float lx, float ly,
+                                         float rx, float ry) {
+        m_input_subsystem.GetTas()->SetLiveInput(player, buttons, {lx, ly}, {rx, ry});
+    });
     m_load_result = m_system.Load(EmulationSession::GetInstance().Window(), filepath, params);
     if (m_load_result != Core::SystemResultStatus::Success) {
         return m_load_result;

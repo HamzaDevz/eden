@@ -126,6 +126,13 @@ public:
      */
     std::tuple<TasState, size_t, std::array<size_t, PLAYER_NUMBER>> GetStatus() const;
 
+    /**
+     * Drives one player right away, outside of any script. Used by the game bridge to let an
+     * external agent play; requires tas_enable to stay off so UpdateThread does not clear it.
+     */
+    void SetLiveInput(size_t player_index, u64 buttons, TasAnalog left_axis,
+                      TasAnalog right_axis);
+
 private:
     enum class TasAxis : u8;
 

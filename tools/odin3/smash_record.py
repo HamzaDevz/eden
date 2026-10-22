@@ -77,6 +77,7 @@ def main():
     b.ask("unwatch *", "ok")
     # entry count at +0, is_ready_go at +0x32, is_result_mode at +0x49
     b.ask(f"watch fm 0x50 {smash_state.FIGHTER_MANAGER} 0 0xa0", "ok")
+    b.ask(smash_state.STAGE_WATCH, "ok")
     smash_state.watch_all(b, a.players, work=True)
     layout = {name: [length, [f"{o:#x}" for o in offs]]
               for name, (length, offs) in {**smash_state.FIELDS, **smash_state.WORK}.items()}
@@ -119,7 +120,9 @@ def main():
                         agent.reset()
                         b.release(a.me)
                     fighters = smash_state.parse(f, a.players)
+                    stage = f.watches.get("stage")
                     log(f"saved {frames} frames, {gaps} gaps, "
+                        + f"stage {int.from_bytes(stage, 'little') if stage else '-'}, "
                         + ", ".join(f"p{i} kind {x.kind:#x} stock {x.stock}" for i, x in fighters.items()))
                     level = battery()
                     if level < a.min_battery:

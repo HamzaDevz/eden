@@ -35,9 +35,13 @@ def decode(path, players=2):
         out[name] = np.zeros((n, players, struct.calcsize(fmt) // struct.calcsize(fmt[-1])),
                              np.float32 if fmt[-1] == "f" else np.int64)
     out["frame"] = np.zeros(n, np.int64)
+    out["stage"] = np.full(n, -1, np.int64)
     for t, line in enumerate(lines):
         frame = Frame(line)
         out["frame"][t] = frame.index
+        stage = frame.watches.get("stage")
+        if stage is not None:
+            out["stage"][t] = int.from_bytes(stage, "little")
         for i, fighter in smash_state.parse(frame, players).items():
             out["valid"][t, i] = True
             for name in SCALARS:
@@ -72,7 +76,7 @@ def main():
         n = len(d["frame"])
         total += n
         last = d["valid"].nonzero()[0].max(initial=0)
-        print(os.path.basename(path), n, "frames",
+        print(os.path.basename(path), n, "frames", "stage", d["stage"].max(),
               " vs ".join(f"{int(d['kind'][last, i]):#x} stock {int(d['stock'][last, i])}"
                           for i in range(d["kind"].shape[1])))
     print(total, "frames", f"{total / 3600:.1f} min")

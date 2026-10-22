@@ -70,7 +70,8 @@ class Policy(nn.Module):
         self.motion = nn.Embedding(MOTIONS, 32)
         self.prev_stick = nn.Embedding(BINS, 8)
         width = CONT + 2 * (16 + 32 + 32) + 2 * 8 + len(BUTTON_BITS)
-        self.inp = nn.Sequential(nn.Linear(width, hidden), nn.ReLU(), nn.Linear(hidden, hidden), nn.ReLU())
+        self.inp = nn.Sequential(nn.Linear(width, hidden), nn.ReLU(), nn.Dropout(0.2),
+                                 nn.Linear(hidden, hidden), nn.ReLU(), nn.Dropout(0.2))
         self.gru = nn.GRU(hidden, hidden, batch_first=True)
         self.stick = nn.Linear(hidden, 2 * BINS)
         self.buttons = nn.Linear(hidden, len(BUTTON_BITS))
@@ -164,7 +165,8 @@ def loss_and_acc(model, b):
 
 
 def train(a):
-    paths = smash_dataset.recordings(a.rec)
+    # Matches with Pyra/Mythra or Pokemon Trainer are left out by sequences().
+    paths = [p for p in smash_dataset.recordings(a.rec) if sequences([p])]
     held = paths[::10] if len(paths) >= 10 else paths[-1:]
     trn = [p for p in paths if p not in held] or held
     train_seqs, val_seqs = sequences(trn), sequences(held)
@@ -175,8 +177,9 @@ def train(a):
     model = Policy().to(device)
     opt = torch.optim.AdamW(model.parameters(), lr=a.lr, weight_decay=1e-4)
     sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, a.steps)
-    start = time.time()
+    start, best = time.time(), None
     for step in range(1, a.steps + 1):
+        model.train()
         loss, _, _ = loss_and_acc(model, batch(train_seqs, a.batch, a.length, rng, device))
         opt.zero_grad()
         loss.backward()
@@ -184,13 +187,17 @@ def train(a):
         opt.step()
         sched.step()
         if step % a.every == 0 or step == a.steps:
+            model.eval()
             with torch.no_grad():
-                vloss, vacc, vrec = loss_and_acc(model, batch(val_seqs, 64, a.length, rng, device))
+                vloss, vacc, vrec = loss_and_acc(model, batch(val_seqs, 256, a.length, rng, device))
             print(f"step {step} loss {loss.item():.3f} val {vloss.item():.3f} "
                   f"stick acc {vacc:.3f} button recall {vrec:.3f} {time.time() - start:.0f} s", flush=True)
-    os.makedirs(os.path.dirname(a.out), exist_ok=True)
-    torch.save({"state": model.state_dict(), "delay": DELAY, "matches": len(trn)}, a.out)
-    print("saved", a.out)
+            if best is None or vloss.item() < best:
+                best = vloss.item()
+                os.makedirs(os.path.dirname(a.out), exist_ok=True)
+                torch.save({"state": model.state_dict(), "delay": DELAY, "matches": len(trn),
+                            "step": step, "val": best}, a.out)
+    print(f"saved {a.out} (val {best:.3f})")
 
 
 def main():

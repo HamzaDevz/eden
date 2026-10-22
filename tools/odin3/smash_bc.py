@@ -24,6 +24,7 @@ KINDS, STATUSES, MOTIONS = 128, 1024, 8192
 BINS = 9  # stick values -1 .. 1 by 0.25
 BUTTON_BITS = (0, 1, 2, 3)  # CONTROL_PAD_BUTTON attack, special, jump, guard
 CONT = 2 * 10 + 2  # per fighter continuous features, then the relative position
+STAGES = (3, 310)  # Final Destination, Battlefield
 
 
 def fighter_features(d, i, sign):
@@ -75,6 +76,7 @@ class Policy(nn.Module):
         self.gru = nn.GRU(hidden, hidden, batch_first=True)
         self.stick = nn.Linear(hidden, 2 * BINS)
         self.buttons = nn.Linear(hidden, len(BUTTON_BITS))
+        self.value = nn.Linear(hidden, 1)  # discounted return, trained by smash_rl.py
 
     def forward(self, cont, cat, prev_stick, prev_buttons, h=None):
         e = [self.kind(cat[..., 0]), self.status(cat[..., 1]), self.motion(cat[..., 2]),
@@ -82,7 +84,7 @@ class Policy(nn.Module):
              self.prev_stick(prev_stick[..., 0]), self.prev_stick(prev_stick[..., 1])]
         z = self.inp(torch.cat([cont, *e, prev_buttons], -1))
         z, h = self.gru(z, h)
-        return self.stick(z).unflatten(-1, (2, BINS)), self.buttons(z), h
+        return self.stick(z).unflatten(-1, (2, BINS)), self.buttons(z), self.value(z)[..., 0], h
 
 
 class Agent:
@@ -91,12 +93,20 @@ class Agent:
              "stick_x", "stick_y", "buttons")
 
     def __init__(self, path, me):
-        ckpt = torch.load(os.path.expanduser(path), map_location="cpu")
-        self.model = Policy()
-        self.model.load_state_dict(ckpt["state"])
-        self.model.eval()
+        self.path, self.mtime = os.path.expanduser(path), None
         self.me, self.rng = me, np.random.default_rng()
+        self.reload()
         self.reset()
+
+    def reload(self):
+        """Loads the model again if its file changed, True when it did."""
+        mtime = os.path.getmtime(self.path)
+        if mtime == self.mtime:
+            return False
+        self.model = load(self.path)
+        self.model.eval()
+        self.mtime = mtime
+        return True
 
     def reset(self):
         self.h, self.prev = None, None
@@ -112,7 +122,7 @@ class Agent:
              for k in now}
         cont, cat, _, _ = perspective(d, self.me, 1)
         t = lambda a, dt: torch.tensor(np.asarray(a)[None, None], dtype=dt)
-        logits, blogits, self.h = self.model(
+        logits, blogits, _, self.h = self.model(
             t(cont[-1], torch.float32), t(cat[-1], torch.long), t(self.stick, torch.long),
             t(self.buttons, torch.float32), self.h)
         probs = torch.softmax(logits[0, 0], -1).numpy()
@@ -125,25 +135,36 @@ class Agent:
         return mask, int(lx * 32767), int(ly * 32767)
 
 
-def sequences(paths):
-    """Per match and fighter: (cont, cat, prev_stick, prev_buttons, stick, buttons), delay applied."""
+def load(path):
+    """Policy from a checkpoint; imitation ones have no value head yet."""
+    model = Policy()
+    model.load_state_dict(torch.load(path, map_location="cpu")["state"], strict=False)
+    return model
+
+
+def sequences(paths, extra=None):
+    """Per match and fighter: (cont, cat, prev_stick, prev_buttons, stick, buttons), delay applied,
+    then extra(d, me) per frame if given."""
     out = []
     for path in paths:
         d = smash_dataset.load(path)
         ok = d["valid"].all(1)
         d = {k: v[ok] for k, v in d.items() if v.ndim and len(v) == len(ok)}
-        if len(d["frame"]) < 200 or d["slots"].max() > 1:
+        stage = d.get("stage", np.zeros(0))  # absent from recordings made before it was read
+        stages = set(stage[stage >= 0].tolist())
+        if len(d["frame"]) < 200 or d["slots"].max() > 1 or stages - set(STAGES):
             continue
         for me in (0, 1):
+            more = () if extra is None else (extra(d, me)[DELAY:],)
             for sign in (1, -1):
                 cont, cat, stick, buttons = perspective(d, me, sign)
                 out.append((cont[:-DELAY], cat[:-DELAY], stick[DELAY - 1:-1], buttons[DELAY - 1:-1],
-                            stick[DELAY:], buttons[DELAY:]))
+                            stick[DELAY:], buttons[DELAY:], *more))
     return out
 
 
 def batch(seqs, size, length, rng, device):
-    parts = [[] for _ in range(6)]
+    parts = [[] for _ in seqs[0]]
     for _ in range(size):
         s = seqs[rng.integers(len(seqs))]
         t = rng.integers(len(s[0]) - length)
@@ -154,7 +175,7 @@ def batch(seqs, size, length, rng, device):
 
 def loss_and_acc(model, b):
     cont, cat, prev_stick, prev_buttons, stick, buttons = b
-    logits, blogits, _ = model(cont, cat, prev_stick, prev_buttons)
+    logits, blogits, _, _ = model(cont, cat, prev_stick, prev_buttons)
     loss = nn.functional.cross_entropy(logits.flatten(0, 2), stick.flatten()) + \
         nn.functional.binary_cross_entropy_with_logits(blogits, buttons) * len(BUTTON_BITS)
     acc_stick = (logits.argmax(-1) == stick).float().mean().item()

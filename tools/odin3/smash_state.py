@@ -14,8 +14,12 @@ import struct
 from bridge import Bridge
 
 FIGHTER_MANAGER = "main+0x52b94f8"  # lib::Singleton<app::FighterManager>::instance_
-# app::stage::get_stage_id(): u32 [[[[main+0x532a9d8]]+0x148]+8], Final Destination is 3
+# app::stage::get_stage_id(): u32 [[[[main+0x532a9d8]]+0x148]+8], Final Destination is 3,
+# Battlefield 310
 STAGE_WATCH = "watch stage 4 main+0x532a9d8 0 0x148 8"
+# Static player table, one 0x260 entry per slot in FighterManager entry order: name tag in
+# UTF-16 at +0x28 (10 characters), empty for CPUs.
+PLAYERS, PLAYER_SIZE, NAME = 0x52c5730, 0x260, 0x28
 
 ACC = (0x4160, 0x20)  # current fighter, then its BattleObjectModuleAccessor
 
@@ -62,6 +66,16 @@ def watch_all(bridge, players, work=False):
         for name, (length, offs) in fields.items():
             chain = " ".join(f"{o:#x}" for o in (0, 0x20 + i * 8, *offs))
             bridge.ask(f"watch {i}{name} {length:#x} {FIGHTER_MANAGER} {chain}", "ok")
+        bridge.ask(f"watch {i}tag 0x14 main+{PLAYERS + i * PLAYER_SIZE + NAME:#x}", "ok")
+
+
+def names(frame, players):
+    """Name tag of each player slot, "" when none."""
+    out = {}
+    for i in range(players):
+        raw = frame.watches.get(f"{i}tag")
+        out[i] = raw.decode("utf-16-le", "replace").split("\0")[0] if raw else ""
+    return out
 
 
 def parse(frame, players):

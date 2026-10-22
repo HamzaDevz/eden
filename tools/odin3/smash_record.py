@@ -9,11 +9,15 @@ whose stage selection is random (no stage screen; the random list holds the stag
 and never press B there: it picks up a CPU token. It stops when someone touches a controller, or when the
 console battery gets low.
 
-With --agent, a model trained by smash_bc.py plays fighter --me against the CPU (offline
-only, never against people online) and its matches go to ~/smash-ai/play.
+With --agent, the model plays the player whose name tag is --name (Ultimus): give the tag
+to a player on the character select and its controller is the model's for the match.
+Offline only, never against people online: it stops when the other player is not a CPU,
+unless --sparring (a local human) or --selfplay (the model plays every human slot).
+Matches with the model go to ~/smash-ai/play, the others to ~/smash-ai/rec. It also stops
+once smash_rl.py writes "selfplay" in ~/smash-ai/phase, for the CPU slot to become a player.
 
-  smash_record.py [--out ~/smash-ai/rec] [--auto] [--matches N] [--min-battery 15]
-                  [--agent ~/smash-ai/models/bc.pt [--me 0]]
+  smash_record.py [--out DIR] [--auto] [--matches N] [--min-battery 15]
+                  [--agent ~/smash-ai/models/ultimus.pt [--name Ultimus] [--sparring | --selfplay]]
 """
 import argparse
 import gzip
@@ -31,6 +35,11 @@ ADB = os.path.expanduser("~/Library/Android/sdk/platform-tools/adb")
 LOCK = "/data/local/tmp/odin3.lock"
 PRESS_FRAMES, PRESS_EVERY = 6, 90
 BUTTON_A, BUTTON_PLUS = 0x1, 0x400
+# When + does not start the match, the agent's player has lost its fighter (a late A on the
+# character select): its hand goes to the top left corner, then onto the first fighter, Mario.
+PICK_AFTER = 4
+PICK = ([(0, -32767, 0)] * 120 + [(0, 0, 32767)] * 80 + [(0, 0, -32767)] * 13
+        + [(0, 32767, 0)] * 11 + [(0, 0, 0)] * 10 + [(BUTTON_A, 0, 0)] * PRESS_FRAMES)
 
 
 def log(*args):
@@ -45,6 +54,14 @@ def battery():
     return 100
 
 
+def phase():
+    try:
+        with open(os.path.expanduser("~/smash-ai/phase")) as f:
+            return f.read().strip()
+    except OSError:
+        return "cpu"
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--host", default="127.0.0.1")
@@ -55,21 +72,19 @@ def main():
     ap.add_argument("--min-battery", type=int, default=15)
     ap.add_argument("--release-lock", action="store_true",
                     help=f"remove {LOCK} on exit (the caller took it)")
-    ap.add_argument("--agent", help="model that plays fighter --me")
-    ap.add_argument("--me", type=int, default=0)
+    ap.add_argument("--agent", help="model that plays the player named --name")
+    ap.add_argument("--name", default="Ultimus")
     ap.add_argument("--sparring", action="store_true", help="let the agent face a local human")
+    ap.add_argument("--selfplay", action="store_true", help="the agent plays every human slot")
     a = ap.parse_args()
-    a.out = os.path.expanduser(a.out or ("~/smash-ai/play" if a.agent else "~/smash-ai/rec"))
-    os.makedirs(a.out, exist_ok=True)
     # Started in the background, the process ignores SIGINT: both signals end it cleanly.
     def stop(*_):
         raise KeyboardInterrupt
     signal.signal(signal.SIGINT, stop)
     signal.signal(signal.SIGTERM, stop)
-    agent = None
+    agents, active = {}, {}  # model per slot, and the slots it plays this match
     if a.agent:
         from smash_bc import Agent
-        agent = Agent(a.agent, a.me)
 
     b = Bridge(a.host)
     b.ask("stream 0", "ok")  # drops the frames sent since the connection
@@ -83,8 +98,9 @@ def main():
               for name, (length, offs) in {**smash_state.FIELDS, **smash_state.WORK}.items()}
     b.ask("stream 1", "ok")
 
-    out, path, frames, gaps, last = None, None, 0, 0, None
+    out, path, frames, gaps, last, me = None, None, 0, 0, None, None
     matches, press_until, next_press, pressed, flags = 0, 0, -PRESS_EVERY, 0, None
+    starts, steps, picker = 0, [], None  # + presses on this character select, PICK in progress
     try:
         for line in b.frames(raw=True):
             f = Frame(line)
@@ -95,15 +111,31 @@ def main():
                 log(f"fighters {count} ready_go {ready} result {result}")
             fighting = count >= a.players and not result and f.watches.get("0pos") is not None
 
-            if fighting and out is None:
-                path = os.path.join(a.out, time.strftime("%Y%m%d-%H%M%S") + ".txt.gz")
+            fighters = smash_state.parse(f, a.players) if fighting else {}
+            if out is None and len(fighters) == a.players:
+                tags = smash_state.names(f, a.players)
+                me = next((i for i, t in tags.items() if t == a.name), None) if a.agent else None
+                active = {}
+                if me is not None:
+                    for i, x in fighters.items():
+                        if i != me and not x.cpu and not a.sparring and not a.selfplay:
+                            log(f"player {i + 1} is not a CPU, stopping")
+                            return
+                        if i == me or (not x.cpu and a.selfplay):
+                            if i not in agents:
+                                agents[i] = Agent(a.agent, i)
+                            active[i] = agents[i]
+                folder = a.out or ("~/smash-ai/play" if active else "~/smash-ai/rec")
+                os.makedirs(os.path.expanduser(folder), exist_ok=True)
+                path = os.path.join(os.path.expanduser(folder), time.strftime("%Y%m%d-%H%M%S") + ".txt.gz")
                 out = gzip.open(path + ".part", "wt", compresslevel=6)
                 header = {"title": info[1], "build": info[2], "players": a.players,
                           "manager": smash_state.FIGHTER_MANAGER, "layout": layout,
-                          "agent": a.agent, "me": a.me if a.agent else None}
+                          "names": tags, "agent": a.agent if active else None, "me": me,
+                          "agents": sorted(active)}
                 out.write("# " + json.dumps(header) + "\n")
                 frames, gaps, last = 0, 0, None
-                log(f"match -> {path}")
+                log(f"match -> {path}" + (f", {a.name} is player {me + 1}" if me is not None else ""))
             if out is not None:
                 if fighting:
                     out.write(line + "\n")
@@ -116,14 +148,20 @@ def main():
                     os.rename(path + ".part", path)
                     out = None
                     matches += 1
-                    if agent:
-                        agent.reset()
-                        b.release(a.me)
+                    for i, ag in active.items():
+                        ag.reset()
+                        b.release(i)
+                    active = {}
                     fighters = smash_state.parse(f, a.players)
                     stage = f.watches.get("stage")
                     log(f"saved {frames} frames, {gaps} gaps, "
                         + f"stage {int.from_bytes(stage, 'little') if stage else '-'}, "
                         + ", ".join(f"p{i} kind {x.kind:#x} stock {x.stock}" for i, x in fighters.items()))
+                    if any([ag.reload() for ag in agents.values()]):
+                        log("model reloaded")
+                    if agents and not a.selfplay and phase() == "selfplay":
+                        log(f"{a.name} beats the CPU: make the CPU a player and restart with --selfplay")
+                        return
                     level = battery()
                     if level < a.min_battery:
                         log(f"battery {level} %, stopping")
@@ -131,34 +169,48 @@ def main():
                     if a.matches and matches >= a.matches:
                         return
 
-            if agent and fighting:
-                fighters = smash_state.parse(f, a.players)
-                if len(fighters) == 2:
-                    if not a.sparring and not fighters[1 - a.me].cpu:
-                        log("the opponent is not a CPU, stopping")
-                        return
-                    b.pad(a.me, *agent.act(fighters))
+            if active and len(fighters) == a.players:
+                for i, ag in active.items():
+                    b.pad(i, *ag.act(fighters))
 
             if not a.auto:
                 continue
-            # Our own presses can show up a little late, so their buttons are ignored for a while.
+            # Menu presses go to every controller (on the results only players' ones count) and can
+            # show up a little late, so their buttons are ignored for a while.
             ours = pressed if f.index < next_press + PRESS_EVERY else 0
             touched = {i: hex(p[0]) for i, p in f.pads.items()
-                       if p[0] & ~(ours if i == 0 else 0) and not (agent and i == a.me)}
+                       if p[0] & ~ours and i not in active and i != picker}
             if touched:
                 log(f"controller input from someone else {touched}, stopping")
                 return
+            if steps:
+                b.pad(picker, *steps.pop(0))
+                if not steps:
+                    b.release(picker)
+                    pressed, next_press, starts = BUTTON_A, f.index, 0
+                continue
+            if fighting:
+                starts, picker = 0, None
             if press_until and f.index >= press_until:
-                b.release(0)
+                for i in range(a.players):
+                    b.release(i)
                 press_until = 0
             elif not fighting and f.index >= next_press + PRESS_EVERY:
                 if count == 0:
+                    tags = smash_state.names(f, a.players)
+                    slot = next((i for i, t in tags.items() if t == a.name), None) if a.agent else None
+                    if starts >= PICK_AFTER and slot is not None:
+                        log(f"the match does not start, player {slot + 1} picks Mario")
+                        steps, picker = list(PICK), slot
+                        continue
+                    starts += 1
                     pressed = BUTTON_PLUS  # character select: start the match
                 elif result:
                     pressed = BUTTON_A  # results
                 else:
                     continue  # match loading or ending
-                b.pad(0, pressed)
+                for i in range(a.players):
+                    b.pad(i, pressed)
                 press_until = f.index + PRESS_FRAMES
                 next_press = f.index
     except KeyboardInterrupt:
@@ -168,8 +220,8 @@ def main():
             out.close()
             os.rename(path + ".part", path)
             log(f"partial match kept: {path}")
-        b.release(0)
-        b.release(a.me)
+        for i in {0, *agents}:
+            b.release(i)
         if a.release_lock:
             subprocess.run([ADB, "shell", "rm", "-f", LOCK])
             log("console lock released")

@@ -16,7 +16,11 @@ unless --sparring (a local human) or --selfplay (the model plays every human slo
 Matches with the model go to ~/smash-ai/play, the others to ~/smash-ai/rec. It also stops
 once smash_rl.py writes "selfplay" in ~/smash-ai/phase, for the CPU slot to become a player.
 
-  smash_record.py [--out DIR] [--auto] [--matches N] [--min-battery 15]
+On a PC, --sync 1 makes the game wait for each frame to be handled, so an instance running
+without speed limit never outpaces the agent; --min-battery 0 skips the console checks.
+
+  smash_record.py [--host H] [--port 6560] [--sync K] [--out DIR] [--auto] [--matches N]
+                  [--min-battery 15]
                   [--agent ~/smash-ai/models/ultimus.pt [--name Ultimus] [--sparring | --selfplay]]
 """
 import argparse
@@ -65,6 +69,8 @@ def phase():
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--host", default="127.0.0.1")
+    ap.add_argument("--port", type=int, default=6560)
+    ap.add_argument("--sync", type=int, default=0, help="lockstep, at most this many frames ahead")
     ap.add_argument("--out")
     ap.add_argument("--players", type=int, default=2)
     ap.add_argument("--auto", action="store_true", help="chain matches by driving the menus")
@@ -86,7 +92,7 @@ def main():
     if a.agent:
         from smash_bc import Agent
 
-    b = Bridge(a.host)
+    b = Bridge(a.host, a.port)
     b.ask("stream 0", "ok")  # drops the frames sent since the connection
     info = b.ask("info", "info").split()
     b.ask("unwatch *", "ok")
@@ -97,6 +103,8 @@ def main():
     layout = {name: [length, [f"{o:#x}" for o in offs]]
               for name, (length, offs) in {**smash_state.FIELDS, **smash_state.WORK}.items()}
     b.ask("stream 1", "ok")
+    if a.sync:
+        b.sync(a.sync)
 
     out, path, frames, gaps, last, me = None, None, 0, 0, None, None
     matches, press_until, next_press, pressed, flags = 0, 0, -PRESS_EVERY, 0, None
@@ -128,7 +136,8 @@ def main():
                             active[i] = agents[i]
                 folder = a.out or ("~/smash-ai/play" if active else "~/smash-ai/rec")
                 os.makedirs(os.path.expanduser(folder), exist_ok=True)
-                path = os.path.join(os.path.expanduser(folder), time.strftime("%Y%m%d-%H%M%S") + ".txt.gz")
+                path = os.path.join(os.path.expanduser(folder), time.strftime("%Y%m%d-%H%M%S")
+                                    + (f"-{a.port}" if a.port != 6560 else "") + ".txt.gz")
                 out = gzip.open(path + ".part", "wt", compresslevel=6)
                 header = {"title": info[1], "build": info[2], "players": a.players,
                           "manager": smash_state.FIGHTER_MANAGER, "layout": layout,
@@ -163,7 +172,7 @@ def main():
                     if agents and not a.selfplay and phase() == "selfplay":
                         log(f"{a.name} beats the CPU: make the CPU a player and restart with --selfplay")
                         return
-                    level = battery()
+                    level = battery() if a.min_battery else 100
                     if level < a.min_battery:
                         log(f"battery {level} %, stopping")
                         return

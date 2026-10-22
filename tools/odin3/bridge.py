@@ -34,6 +34,7 @@ class Bridge:
         self.sock = socket.create_connection((host, port), timeout=10)
         self.sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
         self.file = self.sock.makefile("r")
+        self.synced = False
 
     def send(self, line):
         self.sock.sendall((line + "\n").encode())
@@ -48,12 +49,24 @@ class Bridge:
         for got in self.lines():
             if got.startswith(reply + " ") or got.startswith("err "):
                 return got
+            if self.synced and got.startswith("f "):
+                self.tick(got)
         raise EOFError
 
     def frames(self, raw=False):
         for line in self.lines():
             if line.startswith("f "):
                 yield line if raw else Frame(line)
+                if self.synced:  # the caller is done with this frame
+                    self.tick(line)
+
+    def sync(self, slack):
+        """Lockstep: the game waits for each frame to be handled, at most slack frames late."""
+        self.synced = slack > 0
+        return self.ask(f"sync {slack}", "ok")
+
+    def tick(self, line):
+        self.send("tick " + line.split(" ", 2)[1])
 
     def watch(self, spec):
         wid, length, base, *offs = spec.split(":")

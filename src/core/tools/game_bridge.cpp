@@ -12,11 +12,18 @@
 //                                     buttons the low 16 npad bits (A to D-pad down, the same in
 //                                     TAS), sticks -32767..32767
 //   release <player>
+//   sync <k>                          lockstep, 0 to stop: each frame waits (1 s at most) until
+//                                     the client acked a frame at most k older
+//   tick <frame>                      acks a frame line, no reply
 // Each composited frame: f <frame> <time us> [p <index> <buttons> <lx> <ly> <rx> <ry>]...
 //                        [w <id> <hex|->]...
 
+#include <algorithm>
 #include <atomic>
+#include <chrono>
+#include <condition_variable>
 #include <istream>
+#include <mutex>
 #include <optional>
 #include <sstream>
 #include <string>
@@ -45,6 +52,7 @@ using boost::asio::ip::tcp;
 constexpr std::size_t NumPads = 9;
 constexpr u64 MaxRead = 0x10000;
 constexpr u64 MaxWatch = 0x1000;
+constexpr auto SyncTimeout = std::chrono::seconds{1};
 
 void AppendHex(std::string& out, const std::vector<u8>& data) {
     static constexpr char digits[] = "0123456789abcdef";
@@ -100,6 +108,7 @@ struct GameBridge::Impl {
     }
 
     ~Impl() {
+        SetSync(0);
         io_context.stop();
         if (thread.joinable()) {
             thread.join();
@@ -108,7 +117,14 @@ struct GameBridge::Impl {
     }
 
     void OnFrame() {
-        ++frame;
+        const u64 current = ++frame;
+        {
+            std::unique_lock lock{sync_mutex};
+            if (sync_slack != 0) {
+                sync_cv.wait_for(lock, SyncTimeout,
+                                 [&] { return sync_slack == 0 || acked + sync_slack >= current; });
+            }
+        }
         if (!streaming || publish_pending.exchange(true)) {
             return;
         }
@@ -167,9 +183,19 @@ private:
         session->socket.close(ignored);
         session.reset();
         streaming = false;
+        SetSync(0);
         watches.clear();
         ReleasePads();
         LOG_INFO(Core, "Game bridge client disconnected");
+    }
+
+    void SetSync(u64 slack) {
+        {
+            std::scoped_lock lock{sync_mutex};
+            sync_slack = slack;
+            acked = frame;
+        }
+        sync_cv.notify_all();
     }
 
     void Send(const std::string& line) {
@@ -234,6 +260,15 @@ private:
         } else if (command == "stream" && args.size() == 2) {
             streaming = args[1] != "0";
             Send("ok stream\n");
+        } else if (command == "sync" && args.size() == 2) {
+            SetSync(ParseU64(args[1]));
+            Send("ok sync\n");
+        } else if (command == "tick" && args.size() == 2) {
+            {
+                std::scoped_lock lock{sync_mutex};
+                acked = std::max(acked, ParseU64(args[1]));
+            }
+            sync_cv.notify_all();
         } else if (command == "read" && args.size() == 3) {
             const auto address = ParseU64(args[1]);
             const auto length = ParseU64(args[2]);
@@ -393,6 +428,11 @@ private:
     std::atomic<u64> frame{};
     std::atomic_bool streaming{};
     std::atomic_bool publish_pending{};
+
+    std::mutex sync_mutex;
+    std::condition_variable sync_cv;
+    u64 sync_slack{};
+    u64 acked{};
 
     std::vector<Watch> watches;
     std::vector<u8> scratch;

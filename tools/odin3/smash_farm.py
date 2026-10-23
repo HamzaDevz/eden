@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Keeps Smash Ultimate instances recording on the Windows PC, restarting each one before the
 game wears out: without speed limit it hits null pointers after about 2 h (~200 matches),
-then Eden's error log swallows tens of GB.
+then Eden's error log swallows tens of GB. Each Eden also starts at about 7 GB and grows by
+about 3.5 GB an hour: past 45 min two of them filled the PC's 32 GB and training swapped.
 
 Instance k lives in ROOT\\k (eden.exe and its user folder, game bridge on port 6560+k); its
 save keeps player 1 named Ultimus and player 2 a CPU. A restart kills its recorder and Eden,
@@ -280,7 +281,7 @@ def main():
                     help="instances where CPU plays against CPU, into HOME\\rec")
     ap.add_argument("--champion", type=int, nargs="*", default=[0],
                     help="instances where Ultimus plays the champion instead of the candidate")
-    ap.add_argument("--every", type=int, default=5400, help="restart after this many seconds")
+    ap.add_argument("--every", type=int, default=1800, help="restart after this many seconds")
     ap.add_argument("--idle", type=int, default=900, help="restart when nothing was saved for this long")
     a = ap.parse_args()
     instances = [Instance(k, a) for k in a.instances]

@@ -21,6 +21,7 @@ import argparse
 import glob
 import os
 import shutil
+import socket
 import subprocess
 import sys
 import time
@@ -239,6 +240,21 @@ class Instance:
             log(f"instance {self.k}: no bridge")
             return False
         time.sleep(30)  # boot logos: no frames to step through yet
+        # A screenshot waits for the next frame: instance 0 once booted for over a minute.
+        while True:
+            try:
+                b.shot(360)
+                break
+            except (socket.timeout, RuntimeError) as e:
+                if time.time() > self.started + 300:
+                    b.sock.close()
+                    log(f"instance {self.k}: no frame")
+                    return False
+                if isinstance(e, socket.timeout):  # its answer would come out of turn
+                    b.sock.close()
+                    b = Bridge("127.0.0.1", self.port)
+                else:
+                    time.sleep(2)
         try:
             return self.navigate(b)
         except (OSError, RuntimeError) as e:

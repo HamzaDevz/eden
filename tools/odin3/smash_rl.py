@@ -10,9 +10,10 @@ than the value head expected, weighted by exp(advantage / beta).
   smash_rl.py train [--init ~/smash-ai/models/bc.pt] [--out ~/smash-ai/models/ultimus.pt]
   smash_rl.py loop    keeps the best model as models/champion.pt: each new one, trained from it,
                       plays --trial matches against the CPU and replaces it only if it scored
-                      at least as much. The CPU level, in ~/smash-ai/level, goes from 1 up to 9
-                      each time the champion wins --wins of its last --trial matches; at 9
-                      that writes "selfplay" to ~/smash-ai/phase
+                      at least as much as the champion over its last 2 * --trial matches,
+                      which smash_farm.py has it play at the same time. The CPU level, in
+                      ~/smash-ai/level, goes from 1 up to 9 each time the champion wins --wins
+                      of its last --trial matches; at 9 that writes "selfplay" to ~/smash-ai/phase
   smash_rl.py stats   Ultimus' results, most recent last
 """
 import argparse
@@ -189,26 +190,24 @@ def loop(a):
         level = current_level()
         res = [m for m in results(a.play) if m.level == level]
         best, current = version(champion), version(a.out)
-        theirs = [m for m in res if m.version == best][-a.trial:]
+        # The champion's last matches, played next to the candidate's: ten matches measured
+        # alone in the morning were lucky by 1.7 stocks, and no candidate could beat them.
+        theirs = [m for m in res if m.version == best][-2 * a.trial:]
         mine = [m for m in res if m.version == current][-a.trial:]
         score = lambda ms: sum(m.score for m in ms) / len(ms)
-        if len(theirs) == a.trial and sum(m.won for m in theirs) >= a.wins:
+        if len(theirs) >= a.trial and sum(m.won for m in theirs[-a.trial:]) >= a.wins:
             if level < 9:
                 with open(level_file, "w") as f:
                     f.write(f"{level + 1}\n")
-                log(f"{sum(m.won for m in theirs)} wins in {a.trial} at level {level}: level {level + 1}")
+                log(f"{sum(m.won for m in theirs[-a.trial:])} wins in {a.trial} at level {level}: level {level + 1}")
                 continue
             if not os.path.exists(phase) or open(phase).read().strip() != "selfplay":
                 with open(phase, "w") as f:
                     f.write("selfplay\n")
-                log(f"{sum(m.won for m in theirs)} wins in {a.trial} at level 9: self-play")
-        if len(theirs) < a.trial:
-            if current != best:
-                deploy(champion, a.out)
-                log(f"champion {best} plays level {level}")
-        elif current == best:
+                log(f"{sum(m.won for m in theirs[-a.trial:])} wins in {a.trial} at level 9: self-play")
+        if current == best:
             train(a)
-        elif len(mine) == a.trial:
+        elif len(mine) == a.trial and len(theirs) >= a.trial:
             if score(mine) >= score(theirs):
                 deploy(a.out, champion)
                 shutil.copy(champion, champion.replace(".pt", f"-{current}.pt"))

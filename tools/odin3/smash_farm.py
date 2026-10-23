@@ -9,10 +9,12 @@ starts the game again, finds its way to the character select by comparing screen
 the screens in smash_screens.npz, puts Mario in player 1's slot (found by his portrait in
 smash_mario.npy, the grid grows as matches unlock fighters), as a CPU for the instances
 listed by --cpu, sets player 2's level (9 against a CPU, else the one in HOME\\level, which
-smash_rl.py raises), then starts smash_record.py, which starts the matches. An instance is
-restarted too when its recorder saved nothing for --idle seconds, or when the level changed.
+smash_rl.py raises), then starts smash_record.py, which starts the matches. Ultimus plays
+models/champion.pt on the instances listed by --champion and the candidate models/ultimus.pt on
+the others, so that smash_rl.py compares them on matches played at the same time. An instance
+is restarted too when its recorder saved nothing for --idle seconds, or when the level changed.
 
-  smash_farm.py --instances 0 1 [--cpu 0] [--every 5400] [--idle 900]
+  smash_farm.py --instances 0 1 [--cpu 0] [--champion 0] [--every 5400] [--idle 900]
 """
 import argparse
 import glob
@@ -256,7 +258,8 @@ class Instance:
             log(f"instance {self.k}: character select not reached")
             return
         mode = (["--out", os.path.join(self.a.home, "rec")] if self.cpu else
-                ["--agent", os.path.join(self.a.home, "models", "ultimus.pt"),
+                ["--agent", os.path.join(self.a.home, "models",
+                                         "champion.pt" if self.k in self.a.champion else "ultimus.pt"),
                  "--out", os.path.join(self.a.home, "play")])
         with open(self.log, "a") as out:
             subprocess.Popen([sys.executable, "-u", "smash_record.py", "--port", str(self.port),
@@ -273,6 +276,8 @@ def main():
     ap.add_argument("--home", default=r"C:\Emulation\tools\smash-ai")
     ap.add_argument("--cpu", type=int, nargs="*", default=[],
                     help="instances where CPU plays against CPU, into HOME\\rec")
+    ap.add_argument("--champion", type=int, nargs="*", default=[0],
+                    help="instances where Ultimus plays the champion instead of the candidate")
     ap.add_argument("--every", type=int, default=5400, help="restart after this many seconds")
     ap.add_argument("--idle", type=int, default=900, help="restart when nothing was saved for this long")
     a = ap.parse_args()

@@ -84,9 +84,16 @@ def results(folder):
     return out
 
 
+def current_level():
+    path = os.path.join(HOME, "level")
+    return int(open(path).read()) if os.path.exists(path) else 1
+
+
 def train(a):
     rec = [p for p in smash_dataset.recordings(a.rec) if smash_bc.sequences([p])]
-    play = [p for p in smash_dataset.recordings(a.play) if smash_bc.sequences([p])]
+    # Ultimus' recent matches at the current level only: hundreds of old falls at level 9
+    # would mostly teach it to fall again.
+    play = [m.path for m in results(a.play) if m.level == current_level()][-a.recent:]
     rec_seqs, play_seqs = smash_bc.sequences(rec, returns), smash_bc.sequences(play, returns)
     device = ("cuda" if torch.cuda.is_available()
               else "mps" if torch.backends.mps.is_available() else "cpu")
@@ -111,8 +118,9 @@ def train(a):
         adv = (g - value).detach()
         if step > WARMUP:
             w = torch.exp(adv / (adv.std() + 1e-6) / a.beta).clamp(max=20)
-        else:
+        else:  # while the value head learns, only the CPU's moves are imitated
             w = torch.ones_like(adv)
+            w[a.batch - half:] = 0
         vloss = nn.functional.mse_loss(value, g)
         loss = (w * imitation).mean() + a.vcoef * vloss
         opt.zero_grad()
@@ -141,12 +149,12 @@ def deploy(src, dst):
 
 def loop(a):
     champion, phase = os.path.join(os.path.dirname(a.out), "champion.pt"), os.path.join(HOME, "phase")
-    level_file = os.path.join(HOME, "level")
+    level_file = os.path.join(HOME, "level")  # also read by smash_farm.py
     if not os.path.exists(champion):
         deploy(a.out, champion)
     a.init = champion
     while True:
-        level = int(open(level_file).read()) if os.path.exists(level_file) else 1
+        level = current_level()
         res = [m for m in results(a.play) if m.level == level]
         best, current = version(champion), version(a.out)
         theirs = [m for m in res if m.version == best][-a.trial:]
@@ -200,6 +208,7 @@ def main():
     ap.add_argument("--beta", type=float, default=1.0, help="advantage temperature, in std units")
     ap.add_argument("--vcoef", type=float, default=1.0)
     ap.add_argument("--every", type=int, default=500)
+    ap.add_argument("--recent", type=int, default=300, help="Ultimus matches trained on")
     ap.add_argument("--trial", type=int, default=10, help="matches that measure a model")
     ap.add_argument("--wins", type=int, default=6, help="champion wins in --trial that raise the level")
     a = ap.parse_args()

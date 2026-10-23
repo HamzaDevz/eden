@@ -111,6 +111,21 @@ def on_mario(shot, mario):
     return np.abs(crop - mario).mean() < 15
 
 
+def pick_mario(b, mario):
+    """Sweeps player 1's hand along rows from the top left corner until its panel shows Mario,
+    then puts the token there; True once done."""
+    play(b, "sl120 su80 w10")
+    for row in range(12):
+        play(b, "sd6")
+        for col in range(16):
+            play(b, "sr6")
+            if on_mario(b.shot(360), mario):
+                play(b, "a w30")
+                return True
+        play(b, "sl120")
+    return False
+
+
 def read_level(shot, digits):
     """Player 2's level as the hovered box shows it, None if no digit matches."""
     w, h, bgra = shot
@@ -176,7 +191,10 @@ class Instance:
         else:
             return False
         if name == "css":
-            self.pick_mario(b)
+            if self.cpu:  # the select forgets that player 1 was a CPU: the player button first
+                play(b, "sd22 w10 a w30")
+            if not pick_mario(b, self.mario):
+                log(f"instance {self.k}: Mario not found")
             shot = grab(b)
             name = screen(shot[0], self.refs)[0] if shot else "none"
         ready = name == "ready" and self.set_level(b)
@@ -184,22 +202,6 @@ class Instance:
         if shot:  # to check the character select from afar
             write_png(os.path.join(self.a.home, f"shot{self.k}.png"), *shot[1])
         return ready
-
-    def pick_mario(self, b):
-        """Sweeps player 1's hand along rows from the top left corner until its panel shows
-        Mario, then puts the token there."""
-        if self.cpu:  # the select forgets that player 1 was a CPU: the player button first
-            play(b, "sd22 w10 a w30")
-        play(b, "sl120 su80 w10")
-        for row in range(12):
-            play(b, "sd6")
-            for col in range(16):
-                play(b, "sr6")
-                if on_mario(b.shot(360), self.mario):
-                    play(b, "a w30")
-                    return
-            play(b, "sl120")
-        log(f"instance {self.k}: Mario not found")
 
     def set_level(self, b):
         """Sets player 2's level through its list; True once the box shows it."""

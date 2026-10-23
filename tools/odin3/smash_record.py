@@ -32,6 +32,7 @@ import subprocess
 import sys
 import time
 
+import smash_farm
 import smash_state
 from bridge import Bridge, Frame
 
@@ -41,6 +42,9 @@ PRESS_FRAMES, PRESS_EVERY = 6, 90
 BUTTON_A, BUTTON_PLUS = 0x1, 0x400
 # When + does not start the match, the agent's player has lost its fighter (a late A on the
 # character select): its hand goes to the top left corner, then onto the first fighter, Mario.
+# For player 1, smash_farm finds its way back to the character select (the presses may have
+# wandered off into other menus) and looks for his portrait, as the grid grows with the
+# fighters that matches unlock.
 PICK_AFTER = 4
 PICK = ([(0, -32767, 0)] * 120 + [(0, 0, 32767)] * 80 + [(0, 0, -32767)] * 13
         + [(0, 32767, 0)] * 11 + [(0, 0, 0)] * 10 + [(BUTTON_A, 0, 0)] * PRESS_FRAMES)
@@ -212,6 +216,19 @@ def main():
                 if count == 0:
                     tags = smash_state.names(f, a.players)
                     slot = next((i for i, t in tags.items() if t == a.name), None) if a.agent else None
+                    # No tag read: off the character select, most likely.
+                    if starts >= PICK_AFTER and a.agent and slot in (0, None):
+                        log("the match does not start, player 1 goes back to the character select")
+                        nav = smash_farm.Instance(a.port - 6560, argparse.Namespace(
+                            cpu=[], home=os.path.expanduser("~/smash-ai")))
+                        nav.level = a.level or 9
+                        if not nav.navigate(b):
+                            log("character select not reached")
+                        b.ask("stream 1", "ok")  # navigate stops the stream when done
+                        if a.sync:
+                            b.sync(a.sync)
+                        starts = 0
+                        continue
                     if starts >= PICK_AFTER and slot is not None:
                         log(f"the match does not start, player {slot + 1} picks Mario")
                         steps, picker = list(PICK), slot

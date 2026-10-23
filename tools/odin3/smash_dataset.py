@@ -58,7 +58,8 @@ def decode(path, players=2):
 def load(path):
     cache = path.replace(".txt.gz", ".npz")
     if not os.path.exists(cache) or os.path.getmtime(cache) < os.path.getmtime(path):
-        np.savez_compressed(cache, **decode(path))
+        np.savez_compressed(cache + ".tmp.npz", **decode(path))
+        os.replace(cache + ".tmp.npz", cache)  # a killed process leaves no broken cache
     return dict(np.load(cache))
 
 

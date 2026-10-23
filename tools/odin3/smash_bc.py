@@ -191,7 +191,8 @@ def train(a):
     held = paths[::10] if len(paths) >= 10 else paths[-1:]
     trn = [p for p in paths if p not in held] or held
     train_seqs, val_seqs = sequences(trn), sequences(held)
-    device = "mps" if torch.backends.mps.is_available() else "cpu"
+    device = ("cuda" if torch.cuda.is_available()
+              else "mps" if torch.backends.mps.is_available() else "cpu")
     print(f"{len(trn)} train / {len(held)} val matches,",
           sum(len(s[0]) for s in train_seqs) // 4, "frames per view, device", device, flush=True)
     rng = np.random.default_rng(0)

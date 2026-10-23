@@ -75,7 +75,8 @@ def train(a):
     rec = [p for p in smash_dataset.recordings(a.rec) if smash_bc.sequences([p])]
     play = [p for p in smash_dataset.recordings(a.play) if smash_bc.sequences([p])]
     rec_seqs, play_seqs = smash_bc.sequences(rec, returns), smash_bc.sequences(play, returns)
-    device = "mps" if torch.backends.mps.is_available() else "cpu"
+    device = ("cuda" if torch.cuda.is_available()
+              else "mps" if torch.backends.mps.is_available() else "cpu")
     init = a.init if os.path.exists(a.init) else os.path.join(HOME, "models/bc.pt")
     log(f"{len(rec)} CPU matches, {len(play)} Ultimus matches, from {init}, device {device}")
     model = smash_bc.load(init).to(device)

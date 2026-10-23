@@ -6,7 +6,8 @@ Every recorded frame, seen from each fighter, gets a reward: damage dealt minus 
 return and the policy imitates each action weighted by exp(advantage / beta): what led to
 stocks is copied more, what lost them less. The CPU level 9 matches (~/smash-ai/rec) and
 Ultimus' own matches (~/smash-ai/play, half of each batch) feed the same training, so it
-learns from the CPU's good moves and from its own.
+learns from the CPU's good moves and from its own, but only from those that did better than
+the value head expected.
 
   smash_rl.py train [--init ~/smash-ai/models/bc.pt] [--out ~/smash-ai/models/ultimus.pt]
   smash_rl.py loop    keeps the best model as models/champion.pt: each new one, trained from it,
@@ -86,7 +87,7 @@ def focused_batch(seqs, hot, size, length, rng, device):
     return [torch.cat(p) for p in zip(parts, more)]
 
 
-Match = collections.namedtuple("Match", "path won score level version")
+Match = collections.namedtuple("Match", "path won score level version me")
 
 
 def results(folder):
@@ -106,7 +107,7 @@ def results(folder):
         stock, damage = d["stock"][rows[-1]], d["damage"][rows[-1]]
         mine, theirs = (stock[me], -damage[me]), (stock[1 - me], -damage[1 - me])
         score = reward({k: d[k][rows] for k in ("damage", "stock")}, me).sum()
-        out.append(Match(path, mine > theirs, score, header.get("level") or 9, header.get("version")))
+        out.append(Match(path, mine > theirs, score, header.get("level") or 9, header.get("version"), me))
     return out
 
 
@@ -119,8 +120,10 @@ def train(a):
     rec = [p for p in smash_dataset.recordings(a.rec) if smash_bc.sequences([p])]
     # Ultimus' recent matches at the current level only: hundreds of old falls at level 9
     # would mostly teach it to fall again.
-    play = [m.path for m in results(a.play) if m.level == current_level()][-a.recent:]
-    rec_seqs, play_seqs = smash_bc.sequences(rec, returns), smash_bc.sequences(play, returns)
+    play = [m for m in results(a.play) if m.level == current_level()][-a.recent:]
+    # Ultimus' side only: the weak CPU's moves are no example.
+    rec_seqs = smash_bc.sequences(rec, returns)
+    play_seqs = smash_bc.sequences([m.path for m in play], returns, {m.path: m.me for m in play})
     hot = lambda seqs: [(s, f) for s in seqs for f in [np.nonzero(s[-1][:, 1])[0]] if len(f)]
     rec_hot, play_hot = hot(rec_seqs), hot(play_seqs)
     device = ("cuda" if torch.cuda.is_available()
@@ -147,6 +150,8 @@ def train(a):
         adv = (g - value).detach()
         if step > WARMUP:
             w = torch.exp(adv / (adv.std() + 1e-6) / a.beta).clamp(max=20)
+            # Most of Ultimus' moves led to falls: weighted down, they were still copied.
+            w[a.batch - half:] *= adv[a.batch - half:] > 0
         else:  # while the value head learns, only the CPU's moves are imitated
             w = torch.ones_like(adv)
             w[a.batch - half:] = 0

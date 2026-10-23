@@ -144,9 +144,9 @@ def load(path):
     return model
 
 
-def sequences(paths, extra=None):
+def sequences(paths, extra=None, sides=None):
     """Per match and fighter: (cont, cat, prev_stick, prev_buttons, stick, buttons), delay applied,
-    then extra(d, me) per frame if given."""
+    then extra(d, me) per frame if given. sides maps each path to the only fighter kept."""
     out = []
     for path in paths:
         d = smash_dataset.load(path)
@@ -156,7 +156,7 @@ def sequences(paths, extra=None):
         stages = set(stage[stage >= 0].tolist())
         if len(d["frame"]) < 200 or d["slots"].max() > 1 or stages - set(STAGES):
             continue
-        for me in (0, 1):
+        for me in [sides[path]] if sides else (0, 1):
             more = () if extra is None else (extra(d, me)[DELAY:],)
             for sign in (1, -1):
                 cont, cat, stick, buttons = perspective(d, me, sign)

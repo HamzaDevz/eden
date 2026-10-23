@@ -137,8 +137,10 @@ class Agent:
 
 def load(path):
     """Policy from a checkpoint; imitation ones have no value head yet."""
+    checkpoint = torch.load(path, map_location="cpu")
     model = Policy()
-    model.load_state_dict(torch.load(path, map_location="cpu")["state"], strict=False)
+    model.load_state_dict(checkpoint["state"], strict=False)
+    model.version = checkpoint.get("version")  # set by smash_rl.py, which compares versions
     return model
 
 

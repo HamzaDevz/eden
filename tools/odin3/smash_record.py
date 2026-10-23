@@ -82,6 +82,7 @@ def main():
     ap.add_argument("--name", default="Ultimus")
     ap.add_argument("--sparring", action="store_true", help="let the agent face a local human")
     ap.add_argument("--selfplay", action="store_true", help="the agent plays every human slot")
+    ap.add_argument("--level", type=int, help="level of the CPU, kept in the match header")
     a = ap.parse_args()
     # Started in the background, the process ignores SIGINT: both signals end it cleanly.
     def stop(*_):
@@ -142,7 +143,8 @@ def main():
                 header = {"title": info[1], "build": info[2], "players": a.players,
                           "manager": smash_state.FIGHTER_MANAGER, "layout": layout,
                           "names": tags, "agent": a.agent if active else None, "me": me,
-                          "agents": sorted(active)}
+                          "agents": sorted(active), "level": a.level,
+                          "version": next(iter(active.values())).model.version if active else None}
                 out.write("# " + json.dumps(header) + "\n")
                 frames, gaps, last = 0, 0, None
                 log(f"match -> {path}" + (f", {a.name} is player {me + 1}" if me is not None else ""))

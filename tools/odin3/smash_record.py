@@ -131,6 +131,9 @@ def main():
             if out is None and len(fighters) == a.players:
                 tags = smash_state.names(f, a.players)
                 me = next((i for i, t in tags.items() if t == a.name), None) if a.agent else None
+                if a.agent and me is None:  # its pad would stay idle, a match to learn nothing from
+                    log(f"no player named {a.name}, stopping")
+                    return
                 active = {}
                 if me is not None:
                     for i, x in fighters.items():

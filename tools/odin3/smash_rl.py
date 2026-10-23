@@ -3,11 +3,9 @@
 
 Every recorded frame, seen from each fighter, gets a reward: damage dealt minus damage taken
 (per 100 %), plus or minus one per stock taken or lost. The value head learns the discounted
-return and the policy imitates each action weighted by exp(advantage / beta): what led to
-stocks is copied more, what lost them less. The CPU level 9 matches (~/smash-ai/rec) and
-Ultimus' own matches (~/smash-ai/play, half of each batch) feed the same training, so it
-learns from the CPU's good moves and from its own, but only from those that did better than
-the value head expected.
+return. The policy imitates every move of the CPU level 9 matches (~/smash-ai/rec), and in
+Ultimus' own matches (~/smash-ai/play, half of each batch) only the moves that did better
+than the value head expected, weighted by exp(advantage / beta).
 
   smash_rl.py train [--init ~/smash-ai/models/bc.pt] [--out ~/smash-ai/models/ultimus.pt]
   smash_rl.py loop    keeps the best model as models/champion.pt: each new one, trained from it,
@@ -148,12 +146,12 @@ def train(a):
         bce = nn.functional.binary_cross_entropy_with_logits(blogits, buttons, reduction="none")
         imitation = ce.view(stick.shape).sum(-1) + bce.sum(-1)
         adv = (g - value).detach()
-        if step > WARMUP:
-            w = torch.exp(adv / (adv.std() + 1e-6) / a.beta).clamp(max=20)
+        w = torch.ones_like(adv)
+        mine = adv[a.batch - half:]
+        if half and step > WARMUP:
             # Most of Ultimus' moves led to falls: weighted down, they were still copied.
-            w[a.batch - half:] *= adv[a.batch - half:] > 0
+            w[a.batch - half:] = torch.exp(mine / (mine.std() + 1e-6) / a.beta).clamp(max=20) * (mine > 0)
         else:  # while the value head learns, only the CPU's moves are imitated
-            w = torch.ones_like(adv)
             w[a.batch - half:] = 0
         vloss = nn.functional.mse_loss(value, g)
         loss = (w * imitation).mean() + a.vcoef * vloss

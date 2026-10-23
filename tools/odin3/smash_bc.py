@@ -84,7 +84,9 @@ class Policy(nn.Module):
              self.prev_stick(prev_stick[..., 0]), self.prev_stick(prev_stick[..., 1])]
         z = self.inp(torch.cat([cont, *e, prev_buttons], -1))
         z, h = self.gru(z, h)
-        return self.stick(z).unflatten(-1, (2, BINS)), self.buttons(z), self.value(z)[..., 0], h
+        # The value reads the features without shaping them: its loss pulled them away from
+        # the moves and every model trained on top of imitation played worse.
+        return self.stick(z).unflatten(-1, (2, BINS)), self.buttons(z), self.value(z.detach())[..., 0], h
 
 
 class Agent:

@@ -222,6 +222,13 @@ protected:
      */
     void SignalPause();
 
+    /**
+     * Counts appended frames as played, for sinks without a device to consume them.
+     *
+     * @param num_frames - Number of frames appended.
+     */
+    void SkipPlayback(u64 num_frames);
+
 protected:
     /// Core system
     Core::System& system;

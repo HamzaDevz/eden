@@ -23,7 +23,12 @@ public:
     explicit NullSinkStreamImpl(Core::System& system_, StreamType type_)
         : SinkStream{system_, type_} {}
     ~NullSinkStreamImpl() override {}
-    void AppendBuffer(SinkBuffer&, std::span<s16>) override {}
+    void AppendBuffer(SinkBuffer& buffer, std::span<s16>) override {
+        // Audio out waits for its buffers to be played, e.g. the video player of SSBU
+        if (type != StreamType::In) {
+            SkipPlayback(buffer.frames);
+        }
+    }
     std::vector<s16> ReleaseBuffer(u64) override {
         return {};
     }

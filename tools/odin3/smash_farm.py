@@ -86,6 +86,11 @@ def grab(b):
     return g, (w, h, bgra)
 
 
+def load_refs():
+    refs = np.load(SCREENS)
+    return {n: refs[n].astype(np.float32) for n in refs.files}
+
+
 def screen(g, refs):
     """Name of the reference screen nearest to g, "dark" or "unknown"."""
     if g.mean() < 12:
@@ -150,8 +155,7 @@ class Instance:
         self.dir = os.path.join(ROOT, str(k))
         self.log = os.path.join(a.home, f"rec{k}.log")
         self.cpu, self.level, self.started = k in a.cpu, 9, 0
-        refs = np.load(SCREENS)
-        self.refs = {n: refs[n].astype(np.float32) for n in refs.files}
+        self.refs = load_refs()
         digits = np.load(LEVELS)
         self.digits = {int(n[5:]): digits[n].astype(np.float32) for n in digits.files}
         self.mario = np.load(MARIO).astype(np.float32)

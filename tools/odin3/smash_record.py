@@ -32,6 +32,8 @@ import subprocess
 import sys
 import time
 
+import numpy as np
+
 import smash_farm
 import smash_state
 from bridge import Bridge, Frame
@@ -119,6 +121,7 @@ def main():
     matches, press_until, next_press, pressed, flags = 0, 0, -PRESS_EVERY, 0, None
     starts, steps, picker = 0, [], None  # + presses on this character select, PICK in progress
     relevel = False  # the CPU level to set on the next character select
+    refs, mario, css_seen = smash_farm.load_refs(), np.load(smash_farm.MARIO).astype(np.float32), 0
     quiet, quiet_until = set(), 0  # slots the agent played, their last input still shows a while
     try:
         for line in b.frames(raw=True):
@@ -248,7 +251,25 @@ def main():
                         steps, picker = list(PICK), slot
                         continue
                     starts += 1
-                    pressed = BUTTON_PLUS  # character select: start the match
+                    # The results also keep the count at 0, and the result flag stays up on the
+                    # character select: only the screen tells them apart. + does not leave the
+                    # results, and an A that comes late on the select drops player 1's fighter.
+                    shot = smash_farm.grab(b) if result else None
+                    name = smash_farm.screen(shot[0], refs)[0] if shot else "ready"
+                    css_seen = css_seen + 1 if name == "css" else 0
+                    if css_seen > 2 and a.agent and slot == 0:
+                        log("player 1 has no fighter, it picks Mario")
+                        if not smash_farm.pick_mario(b, mario):
+                            log("Mario not found")
+                        b.ask("stream 1", "ok")  # play stops the stream when done
+                        if a.sync:
+                            b.sync(a.sync)
+                        css_seen, picker = 0, 0
+                        continue
+                    if name == "dark":  # between two screens: wait for the next one
+                        next_press = f.index
+                        continue
+                    pressed = BUTTON_PLUS if name in ("css", "ready") else BUTTON_A
                 elif result:
                     pressed = BUTTON_A  # results
                 else:

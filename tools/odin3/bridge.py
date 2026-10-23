@@ -7,8 +7,9 @@
 #   bridge.py record <out.txt> [--watch id:len:base[:off...]]...   frames until Ctrl-C
 #   bridge.py pad <player> <buttons hex> <lx> <ly> <rx> <ry> [hold_ms]
 #   bridge.py mirror <from> <to>      copies one player's inputs onto another, every frame
+#   bridge.py shot <out.png> [height]   the next presented frame (Vulkan or OpenGL renderer)
 # Players are npad indices: 0-7 for players 1-8, 8 for handheld.
-import argparse, socket, sys, time
+import argparse, socket, struct, sys, time, zlib
 
 BUTTONS = ["a", "b", "x", "y", "lstick", "rstick", "l", "r", "zl", "zr", "plus", "minus",
            "left", "up", "right", "down"]
@@ -78,6 +79,24 @@ class Bridge:
     def release(self, player):
         self.send(f"release {player}")
 
+    def shot(self, height=360):
+        got = self.ask(f"shot {height}", "shot")
+        if got.startswith("err "):
+            raise RuntimeError(got)
+        _, w, h, data = got.split()
+        return int(w), int(h), bytes.fromhex(data)
+
+
+def write_png(path, width, height, bgra):
+    row = width * 4
+    raw = b"".join(b"\0" + bytes(bgra[y * row + x + c] for x in range(0, row, 4) for c in (2, 1, 0))
+                   for y in range(height))
+    chunk = lambda kind, body: (struct.pack(">I", len(body)) + kind + body
+                                + struct.pack(">I", zlib.crc32(kind + body)))
+    with open(path, "wb") as f:
+        f.write(b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0))
+                + chunk(b"IDAT", zlib.compress(raw)) + chunk(b"IEND", b""))
+
 
 def main():
     ap = argparse.ArgumentParser()
@@ -112,6 +131,8 @@ def main():
             except KeyboardInterrupt:
                 pass
         print(f"{n} frames written to {a.args[0]}", file=sys.stderr)
+    elif a.op == "shot":
+        write_png(a.args[0], *b.shot(int(a.args[1]) if len(a.args) > 1 else 360))
     elif a.op == "pad":
         player, buttons, lx, ly, rx, ry = a.args[:6]
         b.pad(int(player), int(buttons, 16), int(lx), int(ly), int(rx), int(ry))

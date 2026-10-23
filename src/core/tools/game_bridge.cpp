@@ -15,6 +15,8 @@
 //   sync <k>                          lockstep, 0 to stop: each frame waits (1 s at most) until
 //                                     the client acked a frame at most k older
 //   tick <frame>                      acks a frame line, no reply
+//   shot <height>                     -> shot <width> <height> <hex BGRA rows, top first>, the
+//                                     next presented 16:9 frame (not with the null renderer)
 // Each composited frame: f <frame> <time us> [p <index> <buttons> <lx> <ly> <rx> <ry>]...
 //                        [w <id> <hex|->]...
 
@@ -41,6 +43,9 @@
 #include "core/loader/loader.h"
 #include "core/memory.h"
 #include "core/tools/game_bridge.h"
+#include "common/settings.h"
+#include "core/frontend/framebuffer_layout.h"
+#include "video_core/renderer_base.h"
 #include "hid_core/frontend/emulated_controller.h"
 #include "hid_core/hid_core.h"
 
@@ -53,6 +58,7 @@ constexpr std::size_t NumPads = 9;
 constexpr u64 MaxRead = 0x10000;
 constexpr u64 MaxWatch = 0x1000;
 constexpr auto SyncTimeout = std::chrono::seconds{1};
+constexpr u64 MaxShotHeight = 1080;
 
 void AppendHex(std::string& out, const std::vector<u8>& data) {
     static constexpr char digits[] = "0123456789abcdef";
@@ -269,6 +275,8 @@ private:
                 acked = std::max(acked, ParseU64(args[1]));
             }
             sync_cv.notify_all();
+        } else if (command == "shot" && args.size() == 2) {
+            RequestShot(ParseU64(args[1]));
         } else if (command == "read" && args.size() == 3) {
             const auto address = ParseU64(args[1]);
             const auto length = ParseU64(args[2]);
@@ -299,6 +307,35 @@ private:
         } else {
             throw std::invalid_argument("unknown command or wrong argument count");
         }
+    }
+
+    void RequestShot(u64 height) {
+        if (height == 0 || height > MaxShotHeight) {
+            throw std::invalid_argument("height");
+        }
+        auto& renderer = system.Renderer();
+        if (Settings::values.renderer_backend.GetValue() == Settings::RendererBackend::Null ||
+            renderer.IsScreenshotPending()) {
+            throw std::runtime_error("unavailable");
+        }
+        const auto width = static_cast<u32>(height * 16 / 9);
+        shot_data.assign(std::size_t{width} * height * 4, 0);
+        renderer.RequestScreenshot(
+            shot_data.data(),
+            [this, width, height](bool invert_y) {
+                boost::asio::post(io_context, [this, width, height, invert_y] {
+                    const std::size_t row = std::size_t{width} * 4;
+                    std::string reply = fmt::format("shot {} {} ", width, height);
+                    reply.reserve(reply.size() + shot_data.size() * 2 + 1);
+                    for (u64 y = 0; y < height; ++y) {
+                        const auto src = invert_y ? height - 1 - y : y;
+                        const auto begin = shot_data.begin() + src * row;
+                        AppendHex(reply, std::vector<u8>(begin, begin + row));
+                    }
+                    Send(reply + '\n');
+                });
+            },
+            Layout::DefaultFrameLayout(width, static_cast<u32>(height)));
     }
 
     void SetPad(u64 player, u64 buttons, float lx, float ly, float rx, float ry) {
@@ -435,6 +472,7 @@ private:
     u64 acked{};
 
     std::vector<Watch> watches;
+    std::vector<u8> shot_data;
     std::vector<u8> scratch;
     u32 pads_set{};
     std::optional<u64> main_base;

@@ -6,7 +6,8 @@ then Eden's error log swallows tens of GB.
 Instance k lives in ROOT\\k (eden.exe and its user folder, game bridge on port 6560+k); its
 save keeps player 1 named Ultimus and player 2 a CPU. A restart kills its recorder and Eden,
 starts the game again, finds its way to the character select by comparing screenshots with
-the screens in smash_screens.npz, puts Mario in player 1's slot, as a CPU for the instances
+the screens in smash_screens.npz, puts Mario in player 1's slot (found by his portrait in
+smash_mario.npy, the grid grows as matches unlock fighters), as a CPU for the instances
 listed by --cpu, sets player 2's level (9 against a CPU, else the one in HOME\\level, which
 smash_rl.py raises), then starts smash_record.py, which starts the matches. An instance is
 restarted too when its recorder saved nothing for --idle seconds, or when the level changed.
@@ -33,6 +34,7 @@ ORPHAN = r"user\nand\user\save\0000000000000000\C80FA1D29410835E6100000000000000
 DETACHED = 0x8 | 0x200  # DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP
 SCREENS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "smash_screens.npz")
 LEVELS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "smash_levels.npz")
+MARIO = os.path.join(os.path.dirname(os.path.abspath(__file__)), "smash_mario.npy")
 # Pad scripts in frames: a button or a stick direction held n frames, then w n frames idle.
 # What to press on each known screen on the way to the character select: the main menu and
 # the Smash menu remember their last cursor, the corner moves bring it back to the top left.
@@ -40,11 +42,8 @@ ROUTE = {"title": "a w180", "main": "sl sl su su w20 a w180", "smash": "su su sl
          "rules": "a w700"}
 # Anywhere else (intro video, Spirits menus, a message): back twice, then A.
 LOST = ["b w90", "b w90", "a w180"]
-# Player 1's hand carries its token from the top left corner onto Mario.
-MARIO = "sl120 su80 sd13 sr11 sd14 sr14 w10 a w30"
-# The character select forgets that player 1 was a CPU: its hand goes down onto the player
-# button and makes it a CPU first.
-CPU_MARIO = "sd22 w10 a w30 " + MARIO
+# The character grid grows as matches unlock fighters: the select is also told by the rest.
+ROSTER = slice(3, 22)
 # From the bottom right corner onto player 2's level, which the hand does not always reach:
 # SPIRAL then circles around it until the level box lights up.
 TO_LEVEL = "sr120 sd80 w10 sl27 su12 w10"
@@ -89,13 +88,25 @@ def screen(g, refs):
         return "dark", 0
     name = min(refs, key=lambda n: np.abs(g - refs[n]).mean())
     d = np.abs(g - refs[name]).mean()
-    return (name if d < 25 else "unknown"), d
+    if d >= 25:
+        rest = np.ones(len(g), bool)
+        rest[ROSTER] = False
+        d = np.abs(g - refs["css"])[rest].mean()
+        return ("css" if d < 12 else "unknown"), d
+    return name, d
 
 
 def level_box(shot):
     """Brightness of player 2's level box, white under the hand."""
     w, h, bgra = shot
     return np.frombuffer(bgra, np.uint8).reshape(h, w, 4)[312:328, 576:588, :3].mean()
+
+
+def on_mario(shot, mario):
+    """Whether player 1's panel shows Mario, under its hand or chosen."""
+    w, h, bgra = shot
+    crop = np.frombuffer(bgra, np.uint8).reshape(h, w, 4)[235:305, :300, 2::-1].astype(np.float32)
+    return np.abs(crop - mario).mean() < 15
 
 
 def read_level(shot, digits):
@@ -124,6 +135,7 @@ class Instance:
         self.refs = {n: refs[n].astype(np.float32) for n in refs.files}
         digits = np.load(LEVELS)
         self.digits = {int(n[5:]): digits[n].astype(np.float32) for n in digits.files}
+        self.mario = np.load(MARIO).astype(np.float32)
 
     def kill(self):
         exe = os.path.join(self.dir, "eden.exe")
@@ -162,7 +174,7 @@ class Instance:
         else:
             return False
         if name == "css":
-            play(b, CPU_MARIO if self.cpu else MARIO)
+            self.pick_mario(b)
             shot = grab(b)
             name = screen(shot[0], self.refs)[0] if shot else "none"
         ready = name == "ready" and self.set_level(b)
@@ -170,6 +182,22 @@ class Instance:
         if shot:  # to check the character select from afar
             write_png(os.path.join(self.a.home, f"shot{self.k}.png"), *shot[1])
         return ready
+
+    def pick_mario(self, b):
+        """Sweeps player 1's hand along rows from the top left corner until its panel shows
+        Mario, then puts the token there."""
+        if self.cpu:  # the select forgets that player 1 was a CPU: the player button first
+            play(b, "sd22 w10 a w30")
+        play(b, "sl120 su80 w10")
+        for row in range(12):
+            play(b, "sd6")
+            for col in range(16):
+                play(b, "sr6")
+                if on_mario(b.shot(360), self.mario):
+                    play(b, "a w30")
+                    return
+            play(b, "sl120")
+        log(f"instance {self.k}: Mario not found")
 
     def set_level(self, b):
         """Sets player 2's level through its list; True once the box shows it."""

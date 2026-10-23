@@ -22,6 +22,8 @@ import gzip
 import json
 import os
 import shutil
+import subprocess
+import sys
 import time
 
 import numpy as np
@@ -173,6 +175,13 @@ def train(a):
     log(f"saved {a.out}")
 
 
+def train_apart(a):
+    """train() in a process of its own: in the loop's, each one after the first took 20 min
+    instead of one on the PC."""
+    subprocess.run([sys.executable, "-u", os.path.abspath(__file__), "train",
+                    *[f"--{k}={v}" for k, v in vars(a).items() if k != "op"]], check=True)
+
+
 def version(path):
     return torch.load(path, map_location="cpu").get("version") if os.path.exists(path) else None
 
@@ -209,7 +218,7 @@ def loop(a):
                     f.write("selfplay\n")
                 log(f"{sum(m.won for m in theirs[-a.trial:])} wins in {a.trial} at level 9: self-play")
         if current == best:
-            train(a)
+            train_apart(a)
         elif len(mine) == a.trial and len(theirs) >= a.trial:
             if score(mine) >= score(theirs):
                 deploy(a.out, champion)
@@ -217,7 +226,7 @@ def loop(a):
                 log(f"{current} scores {score(mine):.2f} against {score(theirs):.2f} at level {level}: champion")
                 continue
             log(f"{current} scores {score(mine):.2f} against {score(theirs):.2f} at level {level}: dropped")
-            train(a)
+            train_apart(a)
         time.sleep(60)
 
 

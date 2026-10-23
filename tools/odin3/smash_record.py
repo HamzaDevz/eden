@@ -89,6 +89,8 @@ def main():
     ap.add_argument("--sparring", action="store_true", help="let the agent face a local human")
     ap.add_argument("--selfplay", action="store_true", help="the agent plays every human slot")
     ap.add_argument("--level", type=int, help="level of the CPU, kept in the match header")
+    ap.add_argument("--level-file", help="CPU level to follow, read after each match: player 1 "
+                    "then goes back through the character select to set it")
     a = ap.parse_args()
     # Started in the background, the process ignores SIGINT: both signals end it cleanly.
     def stop(*_):
@@ -116,6 +118,7 @@ def main():
     out, path, frames, gaps, last, me = None, None, 0, 0, None, None
     matches, press_until, next_press, pressed, flags = 0, 0, -PRESS_EVERY, 0, None
     starts, steps, picker = 0, [], None  # + presses on this character select, PICK in progress
+    relevel = False  # the CPU level to set on the next character select
     quiet, quiet_until = set(), 0  # slots the agent played, their last input still shows a while
     try:
         for line in b.frames(raw=True):
@@ -152,7 +155,7 @@ def main():
                 header = {"title": info[1], "build": info[2], "players": a.players,
                           "manager": smash_state.FIGHTER_MANAGER, "layout": layout,
                           "names": tags, "agent": a.agent if active else None, "me": me,
-                          "agents": sorted(active), "level": a.level,
+                          "agents": sorted(active), "level": a.level, "sync": a.sync,
                           "version": next(iter(active.values())).model.version if active else None}
                 out.write("# " + json.dumps(header) + "\n")
                 frames, gaps, last = 0, 0, None
@@ -189,6 +192,12 @@ def main():
                         return
                     if a.matches and matches >= a.matches:
                         return
+                    if a.level_file and os.path.exists(a.level_file):
+                        with open(a.level_file) as lf:
+                            wanted = int(lf.read())
+                        if wanted != a.level:
+                            log(f"CPU level {wanted} wanted instead of {a.level}")
+                            a.level, relevel = wanted, True
 
             if active and len(fighters) == a.players:
                 for i, ag in active.items():
@@ -222,8 +231,8 @@ def main():
                     tags = smash_state.names(f, a.players)
                     slot = next((i for i, t in tags.items() if t == a.name), None) if a.agent else None
                     # No tag read: off the character select, most likely.
-                    if starts >= NAVIGATE_AFTER and a.agent and slot in (0, None):
-                        log("the match does not start, player 1 goes back to the character select")
+                    if relevel and slot == 0 or starts >= NAVIGATE_AFTER and a.agent and slot in (0, None):
+                        log("player 1 goes back to the character select")
                         nav = smash_farm.Instance(a.port - 6560, argparse.Namespace(
                             cpu=[], home=os.path.expanduser("~/smash-ai")))
                         nav.level = a.level or 9
@@ -232,7 +241,7 @@ def main():
                         b.ask("stream 1", "ok")  # navigate stops the stream when done
                         if a.sync:
                             b.sync(a.sync)
-                        starts, picker = 0, 0  # its stick may still show until the match
+                        starts, picker, relevel = 0, 0, False  # its stick may still show until the match
                         continue
                     if starts >= PICK_AFTER and slot not in (0, None):
                         log(f"the match does not start, player {slot + 1} picks Mario")

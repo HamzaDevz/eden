@@ -86,12 +86,13 @@ def focused_batch(seqs, hot, size, length, rng, device):
     return [torch.cat(p) for p in zip(parts, more)]
 
 
-Match = collections.namedtuple("Match", "path won score level version me")
+Match = collections.namedtuple("Match", "path won score level version me lockstep")
 
 
 def results(folder):
     """Each match Ultimus played alone against the CPU, oldest first: result, total reward,
-    CPU level (9 when the recorder was not told) and model version."""
+    CPU level (9 when the recorder was not told), model version, and whether the game waited
+    for the agent (the PC) or not (the Odin, its pads a little late)."""
     out = []
     for path in smash_dataset.recordings(folder):
         with gzip.open(path, "rt") as f:
@@ -106,7 +107,8 @@ def results(folder):
         stock, damage = d["stock"][rows[-1]], d["damage"][rows[-1]]
         mine, theirs = (stock[me], -damage[me]), (stock[1 - me], -damage[1 - me])
         score = reward({k: d[k][rows] for k in ("damage", "stock")}, me).sum()
-        out.append(Match(path, mine > theirs, score, header.get("level") or 9, header.get("version"), me))
+        out.append(Match(path, mine > theirs, score, header.get("level") or 9, header.get("version"), me,
+                         header.get("sync", 1) > 0))
     return out
 
 
@@ -188,7 +190,8 @@ def loop(a):
     a.init = champion
     while True:
         level = current_level()
-        res = [m for m in results(a.play) if m.level == level]
+        # Models are measured on the PC only: the Odin's matches train them but play by other rules.
+        res = [m for m in results(a.play) if m.level == level and m.lockstep]
         best, current = version(champion), version(a.out)
         # The champion's last matches, played next to the candidate's: ten matches measured
         # alone in the morning were lucky by 1.7 stocks, and no candidate could beat them.

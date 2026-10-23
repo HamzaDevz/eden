@@ -34,6 +34,10 @@ import smash_dataset
 HOME = os.path.expanduser("~/smash-ai")
 GAMMA = 0.997  # per frame, a half life of about 4 s
 WARMUP = 500  # steps of plain imitation while the value head learns
+# Ultimus loses most stocks alone, falling beside the stage: each frame there costs a little,
+# before the stock does, and a share of each batch is taken around such frames.
+OFFSTAGE_COST = 0.005
+FOCUS = 0.25
 
 
 def log(*args):
@@ -51,13 +55,35 @@ def reward(d, me):
     return r + gain(-d["stock"][:, other]) - gain(-d["stock"][:, me])
 
 
+def offstage(d, me):
+    """In the air beside the stage, below its level."""
+    return (d["situation"][:, me] == 2) & (d["y"][:, me] < -5) & (np.abs(d["x"][:, me]) > 50)
+
+
 def returns(d, me):
-    r = reward(d, me)
+    """Discounted return of each frame, next to whether the fighter is off the stage."""
+    off = offstage(d, me)
+    r = reward(d, me) - OFFSTAGE_COST * off
     g, acc = np.zeros(len(r), np.float32), 0.0
     for t in range(len(r) - 1, -1, -1):
         acc = r[t] + GAMMA * acc
         g[t] = acc
-    return g
+    return np.stack([g, off], 1)
+
+
+def focused_batch(seqs, hot, size, length, rng, device):
+    """smash_bc.batch, with FOCUS of the windows around the off-stage frames listed in hot."""
+    focus = int(size * FOCUS) if hot else 0
+    parts = smash_bc.batch(seqs, size - focus, length, rng, device)
+    if not focus:
+        return parts
+    picked = []
+    for _ in range(focus):
+        s, frames = hot[rng.integers(len(hot))]
+        t = int(np.clip(frames[rng.integers(len(frames))] - rng.integers(length), 0, len(s[0]) - length))
+        picked.append([a[t:t + length] for a in s])
+    more = [torch.from_numpy(np.stack(p)).to(device) for p in zip(*picked)]
+    return [torch.cat(p) for p in zip(parts, more)]
 
 
 Match = collections.namedtuple("Match", "path won score level version")
@@ -95,6 +121,8 @@ def train(a):
     # would mostly teach it to fall again.
     play = [m.path for m in results(a.play) if m.level == current_level()][-a.recent:]
     rec_seqs, play_seqs = smash_bc.sequences(rec, returns), smash_bc.sequences(play, returns)
+    hot = lambda seqs: [(s, f) for s in seqs for f in [np.nonzero(s[-1][:, 1])[0]] if len(f)]
+    rec_hot, play_hot = hot(rec_seqs), hot(play_seqs)
     device = ("cuda" if torch.cuda.is_available()
               else "mps" if torch.backends.mps.is_available() else "cpu")
     init = a.init if os.path.exists(a.init) else os.path.join(HOME, "models/bc.pt")
@@ -106,11 +134,12 @@ def train(a):
     for step in range(1, a.steps + 1):
         model.train()
         half = a.batch // 2 if play_seqs else 0
-        parts = smash_bc.batch(rec_seqs, a.batch - half, a.length, rng, device)
+        parts = focused_batch(rec_seqs, rec_hot, a.batch - half, a.length, rng, device)
         if half:
-            more = smash_bc.batch(play_seqs, half, a.length, rng, device)
+            more = focused_batch(play_seqs, play_hot, half, a.length, rng, device)
             parts = [torch.cat(p) for p in zip(parts, more)]
         cont, cat, prev_stick, prev_buttons, stick, buttons, g = parts
+        g = g[..., 0]
         logits, blogits, value, _ = model(cont, cat, prev_stick, prev_buttons)
         ce = nn.functional.cross_entropy(logits.flatten(0, 2), stick.flatten(), reduction="none")
         bce = nn.functional.binary_cross_entropy_with_logits(blogits, buttons, reduction="none")

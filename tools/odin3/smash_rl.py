@@ -178,8 +178,11 @@ def train(a):
 def train_apart(a):
     """train() in a process of its own: in the loop's, each one after the first took 20 min
     instead of one on the PC."""
-    subprocess.run([sys.executable, "-u", os.path.abspath(__file__), "train",
-                    *[f"--{k}={v}" for k, v in vars(a).items() if k != "op"]], check=True)
+    done = subprocess.run([sys.executable, "-u", os.path.abspath(__file__), "train",
+                           *[f"--{k}={v}" for k, v in vars(a).items() if k != "op"]]).returncode == 0
+    if not done:  # out of memory while other work shares the PC: the next turn tries again
+        log("training failed")
+    return done
 
 
 def version(path):

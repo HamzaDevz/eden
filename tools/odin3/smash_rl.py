@@ -201,36 +201,40 @@ def loop(a):
         deploy(a.out, champion)
     a.init = champion
     while True:
-        level = current_level()
-        # Models are measured on the PC only: the Odin's matches train them but play by other rules.
-        res = [m for m in results(a.play) if m.level == level and m.lockstep]
-        best, current = version(champion), version(a.out)
-        # The champion's last matches, played next to the candidate's: ten matches measured
-        # alone in the morning were lucky by 1.7 stocks, and no candidate could beat them.
-        theirs = [m for m in res if m.version == best][-2 * a.trial:]
-        mine = [m for m in res if m.version == current][-a.trial:]
-        score = lambda ms: sum(m.score for m in ms) / len(ms)
-        if len(theirs) >= a.trial and sum(m.won for m in theirs[-a.trial:]) >= a.wins:
-            if level < 9:
-                with open(level_file, "w") as f:
-                    f.write(f"{level + 1}\n")
-                log(f"{sum(m.won for m in theirs[-a.trial:])} wins in {a.trial} at level {level}: level {level + 1}")
-                continue
-            if not os.path.exists(phase) or open(phase).read().strip() != "selfplay":
-                with open(phase, "w") as f:
-                    f.write("selfplay\n")
-                log(f"{sum(m.won for m in theirs[-a.trial:])} wins in {a.trial} at level 9: self-play")
-        if current == best:
-            train_apart(a)
-        elif len(mine) == a.trial and len(theirs) >= a.trial:
-            if score(mine) >= score(theirs):
-                deploy(a.out, champion)
-                shutil.copy(champion, champion.replace(".pt", f"-{current}.pt"))
-                log(f"{current} scores {score(mine):.2f} against {score(theirs):.2f} at level {level}: champion")
-                continue
-            log(f"{current} scores {score(mine):.2f} against {score(theirs):.2f} at level {level}: dropped")
-            train_apart(a)
-        time.sleep(60)
+        try:
+            level = current_level()
+            # Models are measured on the PC only: the Odin's matches train them but play by other rules.
+            res = [m for m in results(a.play) if m.level == level and m.lockstep]
+            best, current = version(champion), version(a.out)
+            # The champion's last matches, played next to the candidate's: ten matches measured
+            # alone in the morning were lucky by 1.7 stocks, and no candidate could beat them.
+            theirs = [m for m in res if m.version == best][-2 * a.trial:]
+            mine = [m for m in res if m.version == current][-a.trial:]
+            score = lambda ms: sum(m.score for m in ms) / len(ms)
+            if len(theirs) >= a.trial and sum(m.won for m in theirs[-a.trial:]) >= a.wins:
+                if level < 9:
+                    with open(level_file, "w") as f:
+                        f.write(f"{level + 1}\n")
+                    log(f"{sum(m.won for m in theirs[-a.trial:])} wins in {a.trial} at level {level}: level {level + 1}")
+                    continue
+                if not os.path.exists(phase) or open(phase).read().strip() != "selfplay":
+                    with open(phase, "w") as f:
+                        f.write("selfplay\n")
+                    log(f"{sum(m.won for m in theirs[-a.trial:])} wins in {a.trial} at level 9: self-play")
+            if current == best:
+                train_apart(a)
+            elif len(mine) == a.trial and len(theirs) >= a.trial:
+                if score(mine) >= score(theirs):
+                    deploy(a.out, champion)
+                    shutil.copy(champion, champion.replace(".pt", f"-{current}.pt"))
+                    log(f"{current} scores {score(mine):.2f} against {score(theirs):.2f} at level {level}: champion")
+                    continue
+                log(f"{current} scores {score(mine):.2f} against {score(theirs):.2f} at level {level}: dropped")
+                train_apart(a)
+            time.sleep(60)
+        except MemoryError:  # other work on the PC took it all: wait for it to finish
+            log("out of memory, next turn in 5 min")
+            time.sleep(300)
 
 
 def stats(a):

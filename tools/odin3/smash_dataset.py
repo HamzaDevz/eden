@@ -58,9 +58,16 @@ def decode(path, players=2):
 def load(path):
     cache = path.replace(".txt.gz", ".npz")
     if not os.path.exists(cache) or os.path.getmtime(cache) < os.path.getmtime(path):
-        np.savez_compressed(cache + ".tmp.npz", **decode(path))
-        os.replace(cache + ".tmp.npz", cache)  # a killed process leaves no broken cache
-    return dict(np.load(cache))
+        d = decode(path)
+        tmp = f"{cache}.{os.getpid()}.tmp.npz"  # the loop and report.py may cache the same match
+        np.savez_compressed(tmp, **d)
+        try:
+            os.replace(tmp, cache)  # a killed process leaves no broken cache
+        except PermissionError:  # on Windows, while another process reads the one it wrote
+            os.remove(tmp)
+        return d
+    with np.load(cache) as z:
+        return dict(z)
 
 
 def recordings(rec):

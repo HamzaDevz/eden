@@ -282,7 +282,9 @@ def main():
                     pressed = BUTTON_A  # results
                 else:
                     continue  # match loading or ending
-                for i in range(a.players):
+                # Player 1's controller only: on the character select, a press from player 2's
+                # makes it a human player, and the CPU's slot is lost until someone clears it.
+                for i in range(a.players if a.selfplay else 1):
                     b.pad(i, pressed)
                 press_until = f.index + PRESS_FRAMES
                 next_press = f.index

@@ -121,6 +121,7 @@ def main():
     matches, press_until, next_press, pressed, flags = 0, 0, -PRESS_EVERY, 0, None
     starts, steps, picker = 0, [], None  # + presses on this character select, PICK in progress
     relevel = False  # the CPU level to set on the next character select
+    unreached = 0  # character selects missed in a row
     refs, mario, css_seen = smash_farm.load_refs(), np.load(smash_farm.MARIO).astype(np.float32), 0
     quiet, quiet_until = set(), 0  # slots the agent played, their last input still shows a while
     try:
@@ -239,8 +240,15 @@ def main():
                         nav = smash_farm.Instance(a.port - 6560, argparse.Namespace(
                             cpu=[], home=os.path.expanduser("~/smash-ai")))
                         nav.level = a.level or 9
-                        if not nav.navigate(b):
+                        if nav.navigate(b):
+                            unreached = 0
+                        else:
+                            unreached += 1
                             log("character select not reached")
+                            # Two hours of presses on a screen it did not know: stop instead.
+                            if unreached >= 3:
+                                log("character select not reached 3 times, stopping")
+                                return
                         b.ask("stream 1", "ok")  # navigate stops the stream when done
                         if a.sync:
                             b.sync(a.sync)

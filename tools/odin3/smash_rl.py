@@ -39,6 +39,9 @@ WARMUP = 500  # steps of plain imitation while the value head learns
 # Ultimus loses most stocks alone, falling beside the stage: each frame there costs a little,
 # before the stock does, and a share of each batch is taken around such frames.
 OFFSTAGE_COST = 0.005
+# Both stages end at |x| 80. At level 5 a fifth of its lives were still lost unhit, after
+# 4 s in the air out to |x| 139, mostly above the stage's level.
+EDGE = 80
 # At level 3 it came back 73 % of the time (the CPU 96 %), with no up B in 62 % of the falls
 # it lost, or later and lower (y -66, -33 when it came back): half of each batch, not a quarter.
 FOCUS = 0.5
@@ -60,8 +63,9 @@ def reward(d, me):
 
 
 def offstage(d, me):
-    """In the air beside the stage, below its level."""
-    return (d["situation"][:, me] == 2) & (d["y"][:, me] < -5) & (np.abs(d["x"][:, me]) > 50)
+    """In the air beside the stage, below its level or past its edge."""
+    x = np.abs(d["x"][:, me])
+    return (d["situation"][:, me] == 2) & ((d["y"][:, me] < -5) & (x > 50) | (x > EDGE + 5))
 
 
 def returns(d, me):

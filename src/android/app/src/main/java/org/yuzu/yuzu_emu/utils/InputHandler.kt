@@ -142,8 +142,12 @@ object InputHandler {
      * when its pad went away too or when the handheld leaves its dock.
      */
     fun refreshPlayers(undocked: Boolean = false) {
+        // Players set up without a pad, such as those driven by TAS, are left connected
         for (playerIndex in 1 until PLAYER_COUNT) {
-            if (NativeInput.getIsConnected(playerIndex) && holderOf(playerIndex) == null) {
+            val params = NativeInput.getButtonParam(playerIndex, NativeButton.A)
+            if (params.get("engine", "") == "android" && params.get("guid", "").isNotEmpty() &&
+                NativeInput.getIsConnected(playerIndex) && holderOf(playerIndex) == null
+            ) {
                 NativeInput.releasePlayer(playerIndex)
             }
         }

@@ -221,7 +221,8 @@ object GameCubeAdapter {
     private fun onPadsChanged() {
         val connectedPads = pads.filter { it.connected }
         val joined = connectedPads - InputHandler.extraControllers.toSet()
-        InputHandler.extraControllers = connectedPads
+        InputHandler.extraControllers =
+            InputHandler.extraControllers.filter { it !in pads } + connectedPads
         joined.forEach(NativeInput::registerController)
         InputHandler.refreshPlayers()
         joined.forEach(InputHandler::claimPlayer)

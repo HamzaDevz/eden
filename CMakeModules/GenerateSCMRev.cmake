@@ -7,6 +7,11 @@
 # generate git/build information
 include(GetSCMRev)
 
+# Configure again whenever HEAD moves, or incremental builds keep an old commit in the build name
+if (EXISTS "${CMAKE_SOURCE_DIR}/.git/logs/HEAD")
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/.git/logs/HEAD")
+endif()
+
 function(get_timestamp _var)
     string(TIMESTAMP timestamp UTC)
     set(${_var} "${timestamp}" PARENT_SCOPE)

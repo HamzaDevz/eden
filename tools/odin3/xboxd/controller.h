@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-// Stands in for xow's controller, which fed a uinput device: the gamepad state goes to Eden instead
+// Stands in for xow's controller: the gamepad state goes to the caller's events, which feed uinput
 
 #pragma once
 

@@ -18,19 +18,6 @@ add_library(yuzu-android SHARED
     android_config.h
     native_input.cpp
     native_post_processing.cpp
-    xbox_dongle/bytes.h
-    xbox_dongle/controller.cpp
-    xbox_dongle/controller.h
-    xbox_dongle/dongle.cpp
-    xbox_dongle/dongle.h
-    xbox_dongle/gip.cpp
-    xbox_dongle/gip.h
-    xbox_dongle/log.h
-    xbox_dongle/mt76.cpp
-    xbox_dongle/mt76.h
-    xbox_dongle/usb.cpp
-    xbox_dongle/usb.h
-    xbox_dongle/xbox_dongle_jni.cpp
 )
 
 set_property(TARGET yuzu-android PROPERTY IMPORTED_LOCATION ${FFmpeg_LIBRARY_DIR})

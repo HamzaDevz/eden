@@ -52,7 +52,6 @@ import org.yuzu.yuzu_emu.YuzuApplication
 import org.yuzu.yuzu_emu.databinding.ActivityEmulationBinding
 import org.yuzu.yuzu_emu.dialogs.NetPlayDialog
 import org.yuzu.yuzu_emu.features.input.GameCubeAdapter
-import org.yuzu.yuzu_emu.features.input.XboxWirelessAdapter
 import org.yuzu.yuzu_emu.features.input.NativeInput
 import org.yuzu.yuzu_emu.features.settings.model.BooleanSetting
 import org.yuzu.yuzu_emu.features.settings.model.IntSetting
@@ -287,7 +286,6 @@ class EmulationActivity : AppCompatActivity(), SensorEventListener, InputManager
         inputManager.unregisterInputDeviceListener(this)
         displayManager.unregisterDisplayListener(displayListener)
         GameCubeAdapter.stop()
-        XboxWirelessAdapter.stop()
         stopForegroundService(this)
         NativeLibrary.playTimeManagerStop()
     }
@@ -842,7 +840,6 @@ class EmulationActivity : AppCompatActivity(), SensorEventListener, InputManager
         NativeLibrary.playTimeManagerStart()
         InputHandler.refreshPlayers()
         GameCubeAdapter.start(this)
-        XboxWirelessAdapter.start(this, ::showGameList)
 
     }
 

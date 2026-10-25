@@ -2,9 +2,4 @@
 <resources>
     <!-- Nintendo's GameCube controller adapter -->
     <usb-device vendor-id="1406" product-id="823" />
-    <!-- Microsoft's Xbox Wireless Adapters -->
-    <usb-device vendor-id="1118" product-id="742" />
-    <usb-device vendor-id="1118" product-id="766" />
-    <usb-device vendor-id="1118" product-id="761" />
-    <usb-device vendor-id="1118" product-id="2334" />
 </resources>

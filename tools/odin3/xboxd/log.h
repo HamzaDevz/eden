@@ -1,15 +1,15 @@
 // SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-// Routes xow's printf-style logging to Eden's log
+// Routes xow's printf-style logging to stderr, with the time
 
 #pragma once
 
 #include <cstdio>
+#include <ctime>
 #include <string>
 
 #include "bytes.h"
-#include "common/logging.h"
 
 namespace Log {
 
@@ -24,19 +24,25 @@ std::string format(const std::string& message, Args... args) {
     }
 }
 
-template <typename... Args>
-void debug(const std::string& message, Args... args) {
-    LOG_DEBUG(Input, "[XboxDongle] {}", format(message, args...));
+inline void write(const char* level, const std::string& message) {
+    const std::time_t now = std::time(nullptr);
+    char stamp[16];
+    std::strftime(stamp, sizeof(stamp), "%H:%M:%S", std::localtime(&now));
+    std::fprintf(stderr, "%s %s %s\n", stamp, level, message.c_str());
 }
+
+// Packet-level detail, too much for the log
+template <typename... Args>
+void debug(const std::string& message, Args... args) {}
 
 template <typename... Args>
 void info(const std::string& message, Args... args) {
-    LOG_INFO(Input, "[XboxDongle] {}", format(message, args...));
+    write("I", format(message, args...));
 }
 
 template <typename... Args>
 void error(const std::string& message, Args... args) {
-    LOG_ERROR(Input, "[XboxDongle] {}", format(message, args...));
+    write("E", format(message, args...));
 }
 
 inline std::string formatBytes(const Bytes& bytes) {

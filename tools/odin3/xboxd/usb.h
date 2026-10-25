@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-// xow's USB device interface over a usbfs file descriptor from Android's UsbManager, which has
-// already claimed the dongle's interface
+// xow's USB device interface over a usbfs file descriptor whose interface the caller has
+// already claimed
 
 #pragma once
 

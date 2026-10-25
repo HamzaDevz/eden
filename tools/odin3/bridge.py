@@ -8,6 +8,7 @@
 #   bridge.py pad <player> <buttons hex> <lx> <ly> <rx> <ry> [hold_ms]
 #   bridge.py mirror <from> <to>      copies one player's inputs onto another, every frame
 #   bridge.py shot <out.png> [height]   the next presented frame (Vulkan or OpenGL renderer)
+#   bridge.py step <frames> [out.png] [height]   runs that many frames then leaves the game paused
 # Players are npad indices: 0-7 for players 1-8, 8 for handheld.
 import argparse, socket, struct, sys, time, zlib
 
@@ -86,6 +87,21 @@ class Bridge:
         _, w, h, data = got.split()
         return int(w), int(h), bytes.fromhex(data)
 
+    def pause(self):
+        """Pauses the whole emulation until resume, step or the client disconnects."""
+        return self.ask("pause", "ok")
+
+    def step(self, frames, height=0):
+        """Runs frames frames, pauses, and returns the shot of the next one when height is set."""
+        got = self.ask(f"step {frames} {height}" if height else f"step {frames}",
+                       "shot" if height else "ok")
+        if got.startswith("err "):
+            raise RuntimeError(got)
+        if not height:
+            return None
+        _, w, h, data = got.split()
+        return int(w), int(h), bytes.fromhex(data)
+
 
 def write_png(path, width, height, bgra):
     row = width * 4
@@ -133,6 +149,13 @@ def main():
         print(f"{n} frames written to {a.args[0]}", file=sys.stderr)
     elif a.op == "shot":
         write_png(a.args[0], *b.shot(int(a.args[1]) if len(a.args) > 1 else 360))
+    elif a.op == "step":
+        # Paused only while connected: the bridge resumes the game when its client leaves.
+        b.sock.settimeout(None)
+        shot = b.step(int(a.args[0]), int(a.args[2]) if len(a.args) > 2 else 360 if len(a.args) > 1 else 0)
+        if shot:
+            write_png(a.args[1], *shot)
+        input("paused, Enter resumes ")
     elif a.op == "pad":
         player, buttons, lx, ly, rx, ry = a.args[:6]
         b.pad(int(player), int(buttons, 16), int(lx), int(ly), int(rx), int(ry))

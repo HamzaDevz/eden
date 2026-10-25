@@ -17,6 +17,10 @@
 //   tick <frame>                      acks a frame line, no reply
 //   shot <height>                     -> shot <width> <height> <hex BGRA rows, top first>, the
 //                                     next presented 16:9 frame (not with the null renderer)
+//   pause, resume                     -> ok pause <frame>, ok resume: the whole emulation, for as
+//                                     long as the client takes (resumed when it disconnects)
+//   step <frames> [height]            runs <frames> frames then pauses -> the shot of the next
+//                                     frame, or ok step <frame> without a height
 // Each composited frame: f <frame> <time us> [p <index> <buttons> <lx> <ly> <rx> <ry>]...
 //                        [w <id> <hex|->]...
 
@@ -131,6 +135,10 @@ struct GameBridge::Impl {
                                  [&] { return sync_slack == 0 || acked + sync_slack >= current; });
             }
         }
+        if (u64 until = step_until.load(); until != 0 && current >= until &&
+            step_until.compare_exchange_strong(until, 0)) {
+            boost::asio::post(io_context, [this] { EndStep(); });
+        }
         if (!streaming || publish_pending.exchange(true)) {
             return;
         }
@@ -190,9 +198,39 @@ private:
         session.reset();
         streaming = false;
         SetSync(0);
+        step_until = 0;
+        Resume();
         watches.clear();
         ReleasePads();
         LOG_INFO(Core, "Game bridge client disconnected");
+    }
+
+    void Pause() {
+        if (!paused) {
+            system.Pause();
+            paused = true;
+        }
+    }
+
+    void Resume() {
+        if (paused) {
+            system.Run();
+            paused = false;
+        }
+    }
+
+    void EndStep() {
+        if (step_height == 0) {
+            Pause();
+            Send(fmt::format("ok step {}\n", frame.load()));
+            return;
+        }
+        try {
+            RequestShot(step_height, true);
+        } catch (const std::exception& e) {
+            Pause();
+            Send(fmt::format("err step {}\n", e.what()));
+        }
     }
 
     void SetSync(u64 slack) {
@@ -277,6 +315,22 @@ private:
             sync_cv.notify_all();
         } else if (command == "shot" && args.size() == 2) {
             RequestShot(ParseU64(args[1]));
+        } else if (command == "pause" && args.size() == 1) {
+            step_until = 0;
+            Pause();
+            Send(fmt::format("ok pause {}\n", frame.load()));
+        } else if (command == "resume" && args.size() == 1) {
+            step_until = 0;
+            Resume();
+            Send("ok resume\n");
+        } else if (command == "step" && (args.size() == 2 || args.size() == 3)) {
+            const auto frames = ParseU64(args[1]);
+            step_height = args.size() == 3 ? ParseU64(args[2]) : 0;
+            if (frames == 0 || step_height > MaxShotHeight) {
+                throw std::invalid_argument("frames or height");
+            }
+            step_until = frame + frames;
+            Resume();
         } else if (command == "read" && args.size() == 3) {
             const auto address = ParseU64(args[1]);
             const auto length = ParseU64(args[2]);
@@ -309,7 +363,7 @@ private:
         }
     }
 
-    void RequestShot(u64 height) {
+    void RequestShot(u64 height, bool pause_after = false) {
         if (height == 0 || height > MaxShotHeight) {
             throw std::invalid_argument("height");
         }
@@ -322,8 +376,11 @@ private:
         shot_data.assign(std::size_t{width} * height * 4, 0);
         renderer.RequestScreenshot(
             shot_data.data(),
-            [this, width, height](bool invert_y) {
-                boost::asio::post(io_context, [this, width, height, invert_y] {
+            [this, width, height, pause_after](bool invert_y) {
+                boost::asio::post(io_context, [this, width, height, invert_y, pause_after] {
+                    if (pause_after) {
+                        Pause();
+                    }
                     const std::size_t row = std::size_t{width} * 4;
                     std::string reply = fmt::format("shot {} {} ", width, height);
                     reply.reserve(reply.size() + shot_data.size() * 2 + 1);
@@ -470,6 +527,10 @@ private:
     std::condition_variable sync_cv;
     u64 sync_slack{};
     u64 acked{};
+
+    std::atomic<u64> step_until{};
+    u64 step_height{};
+    bool paused{};
 
     std::vector<Watch> watches;
     std::vector<u8> shot_data;

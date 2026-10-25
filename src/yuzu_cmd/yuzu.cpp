@@ -33,6 +33,7 @@
 #include "core/hle/service/filesystem/filesystem.h"
 #include "core/loader/loader.h"
 #include "frontend_common/config.h"
+#include "input_common/drivers/tas_input.h"
 #include "input_common/main.h"
 #include "network/network.h"
 #include "sdl_config.h"
@@ -239,6 +240,10 @@ extern "C" SDL_AppResult SDL_AppInit(void **appstate, int argc, char **argv) {
     Service::AM::FrontendAppletParameters load_parameters{
         .applet_id = Service::AM::AppletId::Application,
     };
+    state->system.SetGameBridgePadSink([state](std::size_t player, u64 buttons, float lx, float ly,
+                                               float rx, float ry) {
+        state->input_subsystem.GetTas()->SetLiveInput(player, buttons, {lx, ly}, {rx, ry});
+    });
     const Core::SystemResultStatus load_result = state->system.Load(*state->emu_window, lp.filepath, load_parameters);
     switch (load_result) {
     case Core::SystemResultStatus::Success:

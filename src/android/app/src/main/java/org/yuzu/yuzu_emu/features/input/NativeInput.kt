@@ -230,6 +230,14 @@ object NativeInput {
     external fun loadProfile(name: String, playerIndex: Int): Boolean
 
     /**
+     * Loads an input profile into player 1 and handheld while the game runs, without
+     * reconnecting either controller.
+     * @param name Name of the input profile to load.
+     * @return Whether loading this profile was successful or not.
+     */
+    external fun switchPlayerOneProfile(name: String): Boolean
+
+    /**
      * Saves an input profile.
      * @param name Name of the profile to save.
      * @param playerIndex Index of the player that's currently being edited. Used to write the profile

@@ -9,9 +9,11 @@ package org.yuzu.yuzu_emu.utils
 import android.view.InputDevice
 import android.view.KeyEvent
 import android.view.MotionEvent
+import java.io.File
 import org.yuzu.yuzu_emu.features.input.NativeInput
 import org.yuzu.yuzu_emu.features.input.YuzuInputOverlayDevice
 import org.yuzu.yuzu_emu.features.input.YuzuPhysicalDevice
+import org.yuzu.yuzu_emu.features.input.model.NativeButton
 
 object InputHandler {
     var androidControllers = mapOf<Int, YuzuPhysicalDevice>()
@@ -90,6 +92,10 @@ object InputHandler {
             controllerData = androidControllers[event.device.controllerNumber] ?: return false
         }
 
+        if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) {
+            takeOverPlayerOne(controllerData)
+        }
+
         NativeInput.onGamePadButtonEvent(
             controllerData.getGUID(),
             controllerData.getPort(),
@@ -97,6 +103,43 @@ object InputHandler {
             action
         )
         return true
+    }
+
+    // Like a Switch, a button pressed on a pad no other player holds hands player 1 over to it
+    private fun takeOverPlayerOne(device: YuzuPhysicalDevice) {
+        if (isBoundTo(device, 0) ||
+            (1 until 8).any { NativeInput.getIsConnected(it) && isBoundTo(device, it) }
+        ) {
+            return
+        }
+
+        val profile = findProfile(device)
+        if (profile != null && NativeInput.switchPlayerOneProfile(profile)) {
+            return
+        }
+        val params = registeredControllers.firstOrNull {
+            it.get("guid", "") == device.getGUID() && it.get("port", 0) == device.getPort()
+        } ?: return
+        NativeInput.updateMappingsWithDefault(0, params, device.getName())
+    }
+
+    private fun isBoundTo(device: YuzuPhysicalDevice, playerIndex: Int): Boolean =
+        isDevice(NativeInput.getButtonParam(playerIndex, NativeButton.A), device)
+
+    private fun isDevice(params: ParamPackage, device: YuzuPhysicalDevice): Boolean =
+        params.get("engine", "") == "android" &&
+            params.get("guid", "") == device.getGUID() &&
+            params.get("port", 0) == device.getPort()
+
+    private fun findProfile(device: YuzuPhysicalDevice): String? {
+        val profileDir = File(DirectoryInitialization.userDirectory, "config/input")
+        NativeInput.loadInputProfiles()
+        return NativeInput.getInputProfileNames().firstOrNull { name ->
+            val buttonA = File(profileDir, "$name.ini").takeIf { it.isFile }
+                ?.useLines { lines -> lines.firstOrNull { it.startsWith("button_a=") } }
+                ?: return@firstOrNull false
+            isDevice(ParamPackage(buttonA.substringAfter('=').trim('"')), device)
+        }
     }
 
     fun getButtonIdFromEvent(event: KeyEvent): Int {

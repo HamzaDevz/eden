@@ -407,6 +407,27 @@ jboolean Java_org_yuzu_yuzu_1emu_features_input_NativeInput_loadProfile(JNIEnv* 
     return LoadProfile(profile_name, j_player_index);
 }
 
+jboolean Java_org_yuzu_yuzu_1emu_features_input_NativeInput_switchPlayerOneProfile(
+    JNIEnv* env, jobject j_obj, jstring j_name) {
+    static constexpr size_t HANDHELD_INDEX = 8;
+
+    auto profile_name = Common::Android::GetJString(env, j_name);
+    if (!LoadProfile(profile_name, 0)) {
+        return false;
+    }
+
+    // Player 1 and handheld stand for the same pad, and neither is reconnected so the game
+    // carries on as on a Switch when another controller takes over
+    auto& players = Settings::values.players.GetValue();
+    players[HANDHELD_INDEX].buttons = players[0].buttons;
+    players[HANDHELD_INDEX].analogs = players[0].analogs;
+    players[HANDHELD_INDEX].motions = players[0].motions;
+    auto& hid_core = EmulationSession::GetInstance().System().HIDCore();
+    hid_core.GetEmulatedController(Core::HID::NpadIdType::Player1)->ReloadMappingsFromSettings();
+    hid_core.GetEmulatedController(Core::HID::NpadIdType::Handheld)->ReloadMappingsFromSettings();
+    return true;
+}
+
 jboolean Java_org_yuzu_yuzu_1emu_features_input_NativeInput_saveProfile(JNIEnv* env, jobject j_obj,
                                                                         jstring j_name,
                                                                         jint j_player_index) {

@@ -128,6 +128,22 @@ void EmulatedController::ReloadFromSettings() {
     ReloadInput();
 }
 
+void EmulatedController::ReloadMappingsFromSettings() {
+    const auto player_index = Service::HID::NpadIdTypeToIndex(npad_id_type);
+    const auto& player = Settings::values.players.GetValue()[player_index];
+
+    for (std::size_t index = 0; index < player.buttons.size(); ++index) {
+        button_params[index] = Common::ParamPackage(player.buttons[index]);
+    }
+    for (std::size_t index = 0; index < player.analogs.size(); ++index) {
+        stick_params[index] = Common::ParamPackage(player.analogs[index]);
+    }
+    for (std::size_t index = 0; index < player.motions.size(); ++index) {
+        motion_params[index] = Common::ParamPackage(player.motions[index]);
+    }
+    ReloadInput();
+}
+
 void EmulatedController::ReloadColorsFromSettings() {
     const auto player_index = Service::HID::NpadIdTypeToIndex(npad_id_type);
     const auto& player = Settings::values.players.GetValue()[player_index];

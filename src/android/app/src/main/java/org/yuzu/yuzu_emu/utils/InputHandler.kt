@@ -11,6 +11,7 @@ import android.view.KeyEvent
 import android.view.MotionEvent
 import java.io.File
 import org.yuzu.yuzu_emu.features.input.NativeInput
+import org.yuzu.yuzu_emu.features.input.YuzuInputDevice
 import org.yuzu.yuzu_emu.features.input.YuzuInputOverlayDevice
 import org.yuzu.yuzu_emu.features.input.YuzuPhysicalDevice
 import org.yuzu.yuzu_emu.features.input.model.NativeButton
@@ -18,6 +19,9 @@ import org.yuzu.yuzu_emu.features.input.model.NativeButton
 object InputHandler {
     var androidControllers = mapOf<Int, YuzuPhysicalDevice>()
     var registeredControllers = mutableListOf<ParamPackage>()
+
+    // Pads read by Eden itself rather than by Android, such as the GameCube adapter's
+    var extraControllers = listOf<YuzuInputDevice>()
 
     private val controllerButtons = intArrayOf(
         KeyEvent.KEYCODE_BUTTON_A,
@@ -93,7 +97,7 @@ object InputHandler {
         }
 
         if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) {
-            takeOverPlayerOne(controllerData)
+            claimPlayer(controllerData)
         }
 
         NativeInput.onGamePadButtonEvent(
@@ -105,33 +109,79 @@ object InputHandler {
         return true
     }
 
-    // Like a Switch, a button pressed on a pad no other player holds hands player 1 over to it
-    private fun takeOverPlayerOne(device: YuzuPhysicalDevice) {
-        if (isBoundTo(device, 0) ||
-            (1 until 8).any { NativeInput.getIsConnected(it) && isBoundTo(device, it) }
-        ) {
-            return
-        }
+    private const val PLAYER_COUNT = 8
 
-        val profile = findProfile(device)
-        if (profile != null && NativeInput.switchPlayerOneProfile(profile)) {
+    // The handheld's own pad, which gives player 1 up to any pad that joins
+    private const val BUILT_IN_CONTROLLER_NAME = "Odin Controller"
+
+    private fun isBuiltIn(device: YuzuInputDevice): Boolean =
+        device.getName() == BUILT_IN_CONTROLLER_NAME
+
+    /**
+     * Like a Switch, a pad that plays as no one joins on a button press: as player 1 if the
+     * handheld's own pad or no pad holds it, else as the first free player. The handheld's own
+     * pad takes player 1 back when no one else plays.
+     */
+    fun claimPlayer(device: YuzuInputDevice) {
+        if ((0 until PLAYER_COUNT).any { isPlaying(device, it) }) {
             return
         }
-        val params = registeredControllers.firstOrNull {
-            it.get("guid", "") == device.getGUID() && it.get("port", 0) == device.getPort()
-        } ?: return
-        NativeInput.updateMappingsWithDefault(0, params, device.getName())
+        val holders = (0 until PLAYER_COUNT).map(::holderOf)
+        val playerIndex = if (isBuiltIn(device) && holders.drop(1).all { it == null }) {
+            0
+        } else {
+            holders.indexOfFirst { it == null || (isBuiltIn(it) && !isBuiltIn(device)) }
+        }
+        if (playerIndex >= 0) {
+            assignPlayer(playerIndex, device)
+        }
     }
 
-    private fun isBoundTo(device: YuzuPhysicalDevice, playerIndex: Int): Boolean =
-        isDevice(NativeInput.getButtonParam(playerIndex, NativeButton.A), device)
+    /**
+     * Frees the players whose pad went away, and hands player 1 back to the handheld's own pad
+     * when its pad went away too or when the handheld leaves its dock.
+     */
+    fun refreshPlayers(undocked: Boolean = false) {
+        for (playerIndex in 1 until PLAYER_COUNT) {
+            if (NativeInput.getIsConnected(playerIndex) && holderOf(playerIndex) == null) {
+                NativeInput.releasePlayer(playerIndex)
+            }
+        }
+        val builtIn = androidControllers.values.firstOrNull(::isBuiltIn) ?: return
+        if ((undocked || holderOf(0) == null) && !isPlaying(builtIn, 0)) {
+            assignPlayer(0, builtIn)
+        }
+    }
 
-    private fun isDevice(params: ParamPackage, device: YuzuPhysicalDevice): Boolean =
+    private fun assignPlayer(playerIndex: Int, device: YuzuInputDevice) {
+        Log.info("[InputHandler] ${device.getName()} plays as player ${playerIndex + 1}")
+        NativeInput.assignPlayer(
+            playerIndex,
+            findProfile(device) ?: "",
+            device.getGUID(),
+            device.getPort(),
+            device.getName()
+        )
+    }
+
+    private fun holderOf(playerIndex: Int): YuzuInputDevice? {
+        if (!NativeInput.getIsConnected(playerIndex)) {
+            return null
+        }
+        val params = NativeInput.getButtonParam(playerIndex, NativeButton.A)
+        return (androidControllers.values + extraControllers).firstOrNull { isDevice(params, it) }
+    }
+
+    private fun isPlaying(device: YuzuInputDevice, playerIndex: Int): Boolean =
+        NativeInput.getIsConnected(playerIndex) &&
+            isDevice(NativeInput.getButtonParam(playerIndex, NativeButton.A), device)
+
+    private fun isDevice(params: ParamPackage, device: YuzuInputDevice): Boolean =
         params.get("engine", "") == "android" &&
             params.get("guid", "") == device.getGUID() &&
             params.get("port", 0) == device.getPort()
 
-    private fun findProfile(device: YuzuPhysicalDevice): String? {
+    private fun findProfile(device: YuzuInputDevice): String? {
         val profileDir = File(DirectoryInitialization.userDirectory, "config/input")
         NativeInput.loadInputProfiles()
         return NativeInput.getInputProfileNames().firstOrNull { name ->

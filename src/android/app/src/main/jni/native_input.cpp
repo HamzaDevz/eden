@@ -186,6 +186,26 @@ void ConnectController(size_t player_index, bool connected) {
     }
 }
 
+constexpr size_t HANDHELD_PLAYER_INDEX = 8;
+
+// Players whose connection changed reconnect, the others only pick up their new mappings so
+// their game carries on as on a Switch when a controller takes over
+void ReloadChangedPlayers(const std::array<Settings::PlayerInput, 10>& previous) {
+    const auto& players = Settings::values.players.GetValue();
+    auto& hid_core = EmulationSession::GetInstance().System().HIDCore();
+    for (size_t index = 0; index <= HANDHELD_PLAYER_INDEX; ++index) {
+        const auto& before = previous[index];
+        const auto& after = players[index];
+        auto* controller = hid_core.GetEmulatedControllerByIndex(index);
+        if (before.connected != after.connected || before.controller_type != after.controller_type) {
+            controller->ReloadFromSettings();
+        } else if (before.buttons != after.buttons || before.analogs != after.analogs ||
+                   before.motions != after.motions) {
+            controller->ReloadMappingsFromSettings();
+        }
+    }
+}
+
 extern "C" {
 
 jboolean Java_org_yuzu_yuzu_1emu_features_input_NativeInput_isHandheldOnly(JNIEnv* env,
@@ -407,25 +427,62 @@ jboolean Java_org_yuzu_yuzu_1emu_features_input_NativeInput_loadProfile(JNIEnv* 
     return LoadProfile(profile_name, j_player_index);
 }
 
-jboolean Java_org_yuzu_yuzu_1emu_features_input_NativeInput_switchPlayerOneProfile(
-    JNIEnv* env, jobject j_obj, jstring j_name) {
-    static constexpr size_t HANDHELD_INDEX = 8;
+void Java_org_yuzu_yuzu_1emu_features_input_NativeInput_assignPlayer(
+    JNIEnv* env, jobject j_obj, jint j_player_index, jstring j_profile, jstring j_guid,
+    jint j_port, jstring j_name) {
+    const auto player_index = static_cast<size_t>(j_player_index);
+    auto profile_name = Common::Android::GetJString(env, j_profile);
+    const auto guid = Common::Android::GetJString(env, j_guid);
+    const auto name = Common::Android::GetJString(env, j_name);
 
-    auto profile_name = Common::Android::GetJString(env, j_name);
-    if (!LoadProfile(profile_name, 0)) {
-        return false;
+    auto& players = Settings::values.players.GetValue();
+    const auto previous = players;
+    auto& player = players[player_index];
+    if (profile_name.empty() || !LoadProfile(profile_name, player_index)) {
+        Common::ParamPackage device;
+        device.Set("engine", "android");
+        device.Set("guid", guid);
+        device.Set("port", static_cast<int>(j_port));
+        auto& input_subsystem = EmulationSession::GetInstance().GetInputSubsystem();
+        player.buttons = {};
+        player.analogs = {};
+        player.motions = {};
+        for (auto [index, mapping] : input_subsystem.GetButtonMappingForDevice(device)) {
+            mapping.Set("display", name);
+            player.buttons[index] = mapping.Serialize();
+        }
+        for (auto [index, mapping] : input_subsystem.GetAnalogMappingForDevice(device)) {
+            mapping.Set("display", name);
+            player.analogs[index] = mapping.Serialize();
+        }
+    }
+    player.connected = true;
+
+    // Player 1 and handheld stand for the same pad
+    if (player_index == 0) {
+        players[HANDHELD_PLAYER_INDEX].buttons = player.buttons;
+        players[HANDHELD_PLAYER_INDEX].analogs = player.analogs;
+        players[HANDHELD_PLAYER_INDEX].motions = player.motions;
     }
 
-    // Player 1 and handheld stand for the same pad, and neither is reconnected so the game
-    // carries on as on a Switch when another controller takes over
+    // A pad plays as a single player
+    for (size_t index = 0; index < HANDHELD_PLAYER_INDEX; ++index) {
+        const Common::ParamPackage button_a{players[index].buttons[Settings::NativeButton::A]};
+        if (index != player_index && players[index].connected &&
+            button_a.Get("engine", "") == "android" && button_a.Get("guid", "") == guid &&
+            button_a.Get("port", 0) == j_port) {
+            players[index].connected = false;
+        }
+    }
+    ReloadChangedPlayers(previous);
+}
+
+void Java_org_yuzu_yuzu_1emu_features_input_NativeInput_releasePlayer(JNIEnv* env, jobject j_obj,
+                                                                      jint j_player_index) {
     auto& players = Settings::values.players.GetValue();
-    players[HANDHELD_INDEX].buttons = players[0].buttons;
-    players[HANDHELD_INDEX].analogs = players[0].analogs;
-    players[HANDHELD_INDEX].motions = players[0].motions;
-    auto& hid_core = EmulationSession::GetInstance().System().HIDCore();
-    hid_core.GetEmulatedController(Core::HID::NpadIdType::Player1)->ReloadMappingsFromSettings();
-    hid_core.GetEmulatedController(Core::HID::NpadIdType::Handheld)->ReloadMappingsFromSettings();
-    return true;
+    const auto previous = players;
+    players[static_cast<size_t>(j_player_index)].connected = false;
+    ReloadChangedPlayers(previous);
 }
 
 jboolean Java_org_yuzu_yuzu_1emu_features_input_NativeInput_saveProfile(JNIEnv* env, jobject j_obj,

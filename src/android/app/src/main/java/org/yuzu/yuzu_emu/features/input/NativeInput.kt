@@ -230,12 +230,21 @@ object NativeInput {
     external fun loadProfile(name: String, playerIndex: Int): Boolean
 
     /**
-     * Loads an input profile into player 1 and handheld while the game runs, without
-     * reconnecting either controller.
-     * @param name Name of the input profile to load.
-     * @return Whether loading this profile was successful or not.
+     * Hands a player to a pad while the game runs and takes the pad off any other player. Only
+     * players whose connection changes reconnect.
+     * @param playerIndex Index of the player the pad plays as. Player 1 also maps handheld.
+     * @param profile Input profile to load, or empty for the pad's automatic mapping.
+     * @param guid GUID of the pad.
+     * @param port Port of the pad.
+     * @param name Name shown for the automatic mapping.
      */
-    external fun switchPlayerOneProfile(name: String): Boolean
+    external fun assignPlayer(playerIndex: Int, profile: String, guid: String, port: Int, name: String)
+
+    /**
+     * Disconnects a player while the game runs.
+     * @param playerIndex Index of the player to disconnect.
+     */
+    external fun releasePlayer(playerIndex: Int)
 
     /**
      * Saves an input profile.

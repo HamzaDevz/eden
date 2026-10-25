@@ -18,6 +18,7 @@ import android.content.IntentFilter
 import android.content.res.Configuration
 import android.graphics.Rect
 import android.graphics.drawable.Icon
+import android.hardware.display.DisplayManager
 import android.hardware.input.InputManager
 import android.hardware.Sensor
 import android.hardware.SensorEvent
@@ -50,6 +51,7 @@ import org.yuzu.yuzu_emu.R
 import org.yuzu.yuzu_emu.YuzuApplication
 import org.yuzu.yuzu_emu.databinding.ActivityEmulationBinding
 import org.yuzu.yuzu_emu.dialogs.NetPlayDialog
+import org.yuzu.yuzu_emu.features.input.GameCubeAdapter
 import org.yuzu.yuzu_emu.features.input.NativeInput
 import org.yuzu.yuzu_emu.features.settings.model.BooleanSetting
 import org.yuzu.yuzu_emu.features.settings.model.IntSetting
@@ -75,6 +77,22 @@ class EmulationActivity : AppCompatActivity(), SensorEventListener, InputManager
     var isActivityRecreated = false
     private lateinit var nfcReader: NfcReader
     private lateinit var inputManager: InputManager
+    private lateinit var displayManager: DisplayManager
+
+    // Leaving the dock hands player 1 back to the handheld's own pad, as on a Switch
+    private val displayListener = object : DisplayManager.DisplayListener {
+        override fun onDisplayAdded(displayId: Int) {}
+
+        override fun onDisplayChanged(displayId: Int) {}
+
+        override fun onDisplayRemoved(displayId: Int) {
+            if (displayManager.getDisplays(DisplayManager.DISPLAY_CATEGORY_PRESENTATION)
+                    .isEmpty()
+            ) {
+                InputHandler.refreshPlayers(undocked = true)
+            }
+        }
+    }
 
     private var touchDownTime: Long = 0
     private val maxTapDuration = 500L
@@ -193,6 +211,8 @@ class EmulationActivity : AppCompatActivity(), SensorEventListener, InputManager
 
         inputManager = getSystemService(INPUT_SERVICE) as InputManager
         inputManager.registerInputDeviceListener(this, null)
+        displayManager = getSystemService(DisplayManager::class.java)
+        displayManager.registerDisplayListener(displayListener, mainHandler)
 
         foregroundService = Intent(this, ForegroundService::class.java)
         startForegroundService(foregroundService)
@@ -263,6 +283,8 @@ class EmulationActivity : AppCompatActivity(), SensorEventListener, InputManager
         mainHandler.removeCallbacks(romSwapStopTimeoutRunnable)
         super.onDestroy()
         inputManager.unregisterInputDeviceListener(this)
+        displayManager.unregisterDisplayListener(displayListener)
+        GameCubeAdapter.stop()
         stopForegroundService(this)
         NativeLibrary.playTimeManagerStop()
     }
@@ -467,18 +489,21 @@ class EmulationActivity : AppCompatActivity(), SensorEventListener, InputManager
     override fun onInputDeviceAdded(deviceId: Int) {
         if (isGameController(deviceId)) {
             InputHandler.updateControllerData()
+            InputHandler.refreshPlayers()
             notifyPhysicalControllerState()
         }
     }
 
     override fun onInputDeviceRemoved(deviceId: Int) {
         InputHandler.updateControllerData()
+        InputHandler.refreshPlayers()
         notifyPhysicalControllerState()
     }
 
     override fun onInputDeviceChanged(deviceId: Int) {
         if (isGameController(deviceId)) {
             InputHandler.updateControllerData()
+            InputHandler.refreshPlayers()
             notifyPhysicalControllerState()
         }
     }
@@ -780,6 +805,8 @@ class EmulationActivity : AppCompatActivity(), SensorEventListener, InputManager
         emulationViewModel.setIsEmulationStopping(false)
         emulationViewModel.setEmulationStopped(false)
         NativeLibrary.playTimeManagerStart()
+        InputHandler.refreshPlayers()
+        GameCubeAdapter.start(this)
 
     }
 

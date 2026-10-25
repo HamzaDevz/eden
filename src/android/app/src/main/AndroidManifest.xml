@@ -15,6 +15,7 @@ SPDX-License-Identifier: GPL-3.0-or-later
 <manifest xmlns:android="http://schemas.android.com/apk/res/android" xmlns:tools="http://schemas.android.com/tools">
     <uses-feature android:name="android.hardware.touchscreen" android:required="false" />
     <uses-feature android:name="android.hardware.gamepad" android:required="false" />
+    <uses-feature android:name="android.hardware.usb.host" android:required="false" />
     <uses-feature android:name="android.software.leanback" android:required="false" />
     <uses-feature android:name="android.hardware.vulkan.version" android:version="0x401000" android:required="true" />
 
@@ -100,6 +101,19 @@ SPDX-License-Identifier: GPL-3.0-or-later
                 <category android:name="android.intent.category.DEFAULT" />
             </intent-filter>
             <meta-data android:name="android.nfc.action.TECH_DISCOVERED" android:resource="@xml/nfc_tech_filter" />
+        </activity>
+
+        <activity
+            android:name="org.yuzu.yuzu_emu.activities.GameCubeAdapterActivity"
+            android:theme="@android:style/Theme.NoDisplay"
+            android:taskAffinity=""
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.hardware.usb.action.USB_DEVICE_ATTACHED" />
+            </intent-filter>
+            <meta-data android:name="android.hardware.usb.action.USB_DEVICE_ATTACHED" android:resource="@xml/gamecube_adapter_filter" />
         </activity>
 
         <service android:name="org.yuzu.yuzu_emu.utils.ForegroundService" android:foregroundServiceType="specialUse">

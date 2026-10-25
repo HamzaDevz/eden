@@ -144,6 +144,9 @@ class EmulationFragment : Fragment(), SurfaceHolder.Callback {
     private var isStoppingForRomSwap = false
     private var deferGameSetupUntilStopCompletes = false
 
+    // Set when the Home button suspends the game for the game list, so that coming back resumes it
+    var resumeOnReturn = false
+
     private var perfStatsRunnable: Runnable? = null
     private var socRunnable: Runnable? = null
     private var isAmiiboPickerOpen = false
@@ -1940,6 +1943,10 @@ class EmulationFragment : Fragment(), SurfaceHolder.Callback {
             // Surface changed due to rotation/config change
             // Only update surface reference, don't trigger state changes
             emulationState.updateSurfaceReference(holder.surface)
+        }
+        if (resumeOnReturn && emulationState.isPaused) {
+            resumeOnReturn = false
+            resumeEmulationFromUi()
         }
         updatePausedFrameVisibility()
     }

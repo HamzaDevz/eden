@@ -59,6 +59,7 @@ import org.yuzu.yuzu_emu.features.settings.model.Settings
 import org.yuzu.yuzu_emu.model.EmulationViewModel
 import org.yuzu.yuzu_emu.model.Game
 import org.yuzu.yuzu_emu.network.NetPlayManager
+import org.yuzu.yuzu_emu.ui.main.MainActivity
 import org.yuzu.yuzu_emu.utils.InputHandler
 import org.yuzu.yuzu_emu.utils.Log
 import org.yuzu.yuzu_emu.utils.MemoryUtil
@@ -299,9 +300,32 @@ class EmulationActivity : AppCompatActivity(), SensorEventListener, InputManager
         }
     }
 
+    // The game list brings this activity back for the game picked there, see showGameList
+    private fun showGameList() {
+        val navHostFragment =
+            supportFragmentManager.findFragmentById(R.id.fragment_container) as? NavHostFragment
+        navHostFragment?.childFragmentManager?.fragments
+            ?.filterIsInstance<EmulationFragment>()
+            ?.lastOrNull()
+            ?.resumeOnReturn = true
+        startActivity(
+            Intent(this, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
+        )
+    }
+
+    private fun intentGame(intent: Intent): Game? {
+        val extras = intent.extras ?: return null
+        return BundleCompat.getParcelable(extras, EXTRA_SELECTED_GAME, Game::class.java)
+            ?: BundleCompat.getParcelable(extras, "game", Game::class.java)
+    }
+
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
-        handleSwapIntent(intent)
+        // Picking the suspended game again resumes it rather than starting it over
+        val game = intentGame(intent)
+        if (game == null || !hasEmulationSession || game != processSessionGame) {
+            handleSwapIntent(intent)
+        }
         nfcReader.onNewIntent(intent)
         InputHandler.updateControllerData()
     }
@@ -311,11 +335,7 @@ class EmulationActivity : AppCompatActivity(), SensorEventListener, InputManager
             intent.getBooleanExtra(EXTRA_OVERLAY_GAMELESS_EDIT_MODE, false) -> false
             intent.action == CustomSettingsHandler.CUSTOM_CONFIG_ACTION -> true
             intent.data != null -> true
-            else -> {
-                val extras = intent.extras
-                extras != null &&
-                    BundleCompat.getParcelable(extras, EXTRA_SELECTED_GAME, Game::class.java) != null
-            }
+            else -> intentGame(intent) != null
         }
     }
 
@@ -437,11 +457,15 @@ class EmulationActivity : AppCompatActivity(), SensorEventListener, InputManager
             return super.dispatchKeyEvent(event)
         }
 
-        // Docked, the controller is all there is to reach the menu, so its Home and Back buttons
-        // open and close it as the Home button does on a Switch
+        // Docked, the controller is all there is to leave the game: as on a Switch, its Home
+        // button suspends the game for the game list, and its Back button opens the menu
         if (isControllerInput && InputHandler.isMenuButton(event.keyCode)) {
             if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) {
-                onBackPressedDispatcher.onBackPressed()
+                if (event.keyCode == KeyEvent.KEYCODE_BUTTON_MODE) {
+                    showGameList()
+                } else {
+                    onBackPressedDispatcher.onBackPressed()
+                }
             }
             return true
         }

@@ -4,6 +4,7 @@
 package org.yuzu.yuzu_emu.adapters
 
 import android.content.DialogInterface
+import android.content.Intent
 import android.text.Html
 import android.view.LayoutInflater
 import android.view.ViewGroup
@@ -15,6 +16,7 @@ import androidx.core.content.pm.ShortcutManagerCompat
 import androidx.documentfile.provider.DocumentFile
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.lifecycleScope
+import androidx.navigation.ActivityNavigatorExtras
 import androidx.navigation.findNavController
 import androidx.preference.PreferenceManager
 import androidx.viewbinding.ViewBinding
@@ -269,7 +271,11 @@ class GameAdapter(private val activity: AppCompatActivity) :
                 }
 
                 val action = HomeNavigationDirections.actionGlobalEmulationActivity(game, true)
-                binding.root.findNavController().navigate(action)
+                // Brings back a game suspended by the Home button instead of starting a second one
+                binding.root.findNavController().navigate(
+                    action,
+                    ActivityNavigatorExtras(flags = Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
+                )
             }
 
             if (NativeLibrary.gameRequiresFirmware(game.programId) && !NativeLibrary.isFirmwareAvailable()) {

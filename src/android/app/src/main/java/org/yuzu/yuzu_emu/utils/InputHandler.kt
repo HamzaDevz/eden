@@ -119,29 +119,42 @@ object InputHandler {
             NativeInput.onGamePadAxisEvent(
                 controllerData.getGUID(),
                 controllerData.getPort(),
-                it.axis,
+                getAxisId(event.device, it.axis),
                 event.getAxisValue(it.axis)
             )
         }
         return true
     }
 
+    // Pads that only report GAS and BRAKE get them as the trigger axes, so a binding holds
+    // whichever of the two layouts AYN's copies of a controller come up with.
+    fun getAxisId(device: InputDevice, axis: Int): Int = when {
+        axis == MotionEvent.AXIS_GAS &&
+            device.getMotionRange(MotionEvent.AXIS_RTRIGGER) == null -> MotionEvent.AXIS_RTRIGGER
+        axis == MotionEvent.AXIS_BRAKE &&
+            device.getMotionRange(MotionEvent.AXIS_LTRIGGER) == null -> MotionEvent.AXIS_LTRIGGER
+        else -> axis
+    }
+
     fun getDevices(): Map<Int, YuzuPhysicalDevice> {
         val gameControllerDeviceIds = mutableMapOf<Int, YuzuPhysicalDevice>()
         val deviceIds = InputDevice.getDeviceIds()
-        var port = 0
+        // Ports count per GUID, so a binding survives other controllers coming and going
+        val nextPorts = mutableMapOf<String, Int>()
         val inputSettings = NativeConfig.getInputSettings(true)
         deviceIds.forEach { deviceId ->
             InputDevice.getDevice(deviceId)?.apply {
-                if (isPhysicalGameController(this)) {
-                    if (!gameControllerDeviceIds.contains(controllerNumber)) {
-                        gameControllerDeviceIds[controllerNumber] = YuzuPhysicalDevice(
-                            this,
-                            port,
-                            inputSettings[port].useSystemVibrator
-                        )
-                    }
-                    port++
+                if (isPhysicalGameController(this) &&
+                    !gameControllerDeviceIds.contains(controllerNumber)
+                ) {
+                    val guid = getGUID()
+                    val port = nextPorts.getOrDefault(guid, 0)
+                    nextPorts[guid] = port + 1
+                    gameControllerDeviceIds[controllerNumber] = YuzuPhysicalDevice(
+                        this,
+                        port,
+                        inputSettings[port].useSystemVibrator
+                    )
                 }
             }
         }
@@ -163,5 +176,13 @@ object InputHandler {
         registeredControllers.sortBy { it.get("port", 0) }
     }
 
-    fun InputDevice.getGUID(): String = String.format("%016x%016x", productId, vendorId)
+    // AYN's mapping service hides real controllers behind uinput copies under its own vendor ID
+    // and flips their product ID with the trigger layout, so those are told apart by name.
+    private const val AYN_VENDOR_ID = 0x2020
+
+    fun InputDevice.getGUID(): String = if (vendorId == AYN_VENDOR_ID) {
+        String.format("%016x%016x", name.hashCode().toLong() and 0xFFFFFFFFL, vendorId)
+    } else {
+        String.format("%016x%016x", productId, vendorId)
+    }
 }

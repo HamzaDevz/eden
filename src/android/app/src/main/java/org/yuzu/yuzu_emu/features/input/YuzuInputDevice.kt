@@ -7,6 +7,7 @@ import android.view.InputDevice
 import androidx.annotation.Keep
 import org.yuzu.yuzu_emu.YuzuApplication
 import org.yuzu.yuzu_emu.R
+import org.yuzu.yuzu_emu.utils.InputHandler
 import org.yuzu.yuzu_emu.utils.InputHandler.getGUID
 
 @Keep
@@ -56,7 +57,8 @@ class YuzuPhysicalDevice(
         vibrator.vibrate(intensity)
     }
 
-    override fun getAxes(): Array<Int> = device.motionRanges.map { it.axis }.toTypedArray()
+    override fun getAxes(): Array<Int> =
+        device.motionRanges.map { InputHandler.getAxisId(device, it.axis) }.toTypedArray()
     override fun hasKeys(keys: IntArray): BooleanArray = device.hasKeys(*keys)
 }
 

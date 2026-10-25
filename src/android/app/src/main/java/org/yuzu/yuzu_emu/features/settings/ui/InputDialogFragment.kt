@@ -194,7 +194,7 @@ class InputDialogFragment : DialogFragment() {
             NativeInput.onGamePadAxisEvent(
                 controllerData.getGUID(),
                 controllerData.getPort(),
-                it.axis,
+                InputHandler.getAxisId(event.device, it.axis),
                 event.getAxisValue(it.axis)
             )
             onInputReceived(event.device)

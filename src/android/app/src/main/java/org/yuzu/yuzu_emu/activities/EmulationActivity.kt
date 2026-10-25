@@ -437,6 +437,15 @@ class EmulationActivity : AppCompatActivity(), SensorEventListener, InputManager
             return super.dispatchKeyEvent(event)
         }
 
+        // Docked, the controller is all there is to reach the menu, so its Home and Back buttons
+        // open and close it as the Home button does on a Switch
+        if (isControllerInput && InputHandler.isMenuButton(event.keyCode)) {
+            if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) {
+                onBackPressedDispatcher.onBackPressed()
+            }
+            return true
+        }
+
         if (emulationViewModel.drawerOpen.value) {
             return super.dispatchKeyEvent(event)
         }

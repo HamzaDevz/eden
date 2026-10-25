@@ -196,6 +196,9 @@ object InputHandler {
         }
     }
 
+    fun isMenuButton(keyCode: Int): Boolean =
+        keyCode == KeyEvent.KEYCODE_BUTTON_MODE || keyCode == KeyEvent.KEYCODE_BACK
+
     fun getButtonIdFromEvent(event: KeyEvent): Int {
         if (event.keyCode == 0) {
             return when (event.scanCode) {

@@ -39,7 +39,9 @@ WARMUP = 500  # steps of plain imitation while the value head learns
 # Ultimus loses most stocks alone, falling beside the stage: each frame there costs a little,
 # before the stock does, and a share of each batch is taken around such frames.
 OFFSTAGE_COST = 0.005
-FOCUS = 0.25
+# At level 3 it came back 73 % of the time (the CPU 96 %), with no up B in 62 % of the falls
+# it lost, or later and lower (y -66, -33 when it came back): half of each batch, not a quarter.
+FOCUS = 0.5
 
 
 def log(*args):

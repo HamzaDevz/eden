@@ -26,8 +26,8 @@ std::string format(const std::string& message, Args... args) {
 
 inline void write(const char* level, const std::string& message) {
     const std::time_t now = std::time(nullptr);
-    char stamp[16];
-    std::strftime(stamp, sizeof(stamp), "%H:%M:%S", std::localtime(&now));
+    char stamp[20];
+    std::strftime(stamp, sizeof(stamp), "%m-%d %H:%M:%S", std::localtime(&now));
     std::fprintf(stderr, "%s %s %s\n", stamp, level, message.c_str());
 }
 

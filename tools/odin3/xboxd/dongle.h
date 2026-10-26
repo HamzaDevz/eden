@@ -25,6 +25,7 @@
 #include <cstdint>
 #include <array>
 #include <atomic>
+#include <chrono>
 #include <thread>
 #include <mutex>
 
@@ -59,9 +60,9 @@ public:
 private:
     /* Packet handling */
     void handleControllerConnect(Bytes address);
-    void handleControllerDisconnect(uint8_t wcid);
+    void handleControllerDisconnect(uint8_t wcid, const char *reason);
     void handleControllerPair(Bytes address, const Bytes &packet);
-    void handleControllerPacket(uint8_t wcid, const Bytes &packet);
+    void handleControllerPacket(uint8_t wcid, int8_t rssi, const Bytes &packet);
     void handleWlanPacket(const Bytes &packet);
     void handleBulkData(const Bytes &data);
     void readBulkPackets(uint8_t endpoint);
@@ -72,4 +73,15 @@ private:
     std::mutex controllerMutex;
     const ControllerEvents events;
     std::array<std::unique_ptr<Controller>, MT_WCID_COUNT> controllers;
+
+    // Radio link of each controller, logged when it drops to tell why
+    struct Link
+    {
+        std::chrono::steady_clock::time_point lastPacket;
+        std::chrono::steady_clock::time_point lastRumble;
+        std::chrono::steady_clock::time_point lastReport;
+        int8_t rssi;
+        int8_t worstRssi;
+    };
+    std::array<Link, MT_WCID_COUNT> links;
 };

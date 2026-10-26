@@ -20,6 +20,9 @@
 #include "dongle.h"
 #include "log.h"
 
+#include <algorithm>
+#include <climits>
+
 Dongle::Dongle(
     std::unique_ptr<UsbDevice> usbDevice_,
     const std::string &firmwarePath,
@@ -62,6 +65,11 @@ void Dongle::setRumble(uint8_t slot, uint8_t power)
     if (slot < MT_WCID_COUNT && controllers[slot])
     {
         controllers[slot]->setRumble(power);
+
+        if (power > 0)
+        {
+            links[slot].lastRumble = std::chrono::steady_clock::now();
+        }
     }
 }
 
@@ -88,10 +96,13 @@ void Dongle::handleControllerConnect(Bytes address)
 
     controllers[wcid - 1].reset(new Controller(sendPacket, wcid - 1, events));
 
+    const auto now = std::chrono::steady_clock::now();
+    links[wcid - 1] = {now, {}, now, 0, INT8_MAX};
+
     Log::info("Controller '%d' connected", wcid);
 }
 
-void Dongle::handleControllerDisconnect(uint8_t wcid)
+void Dongle::handleControllerDisconnect(uint8_t wcid, const char *reason)
 {
     // Ignore invalid WCIDs
     if (wcid == 0 || wcid > MT_WCID_COUNT)
@@ -109,14 +120,25 @@ void Dongle::handleControllerDisconnect(uint8_t wcid)
 
     controllers[wcid - 1].reset();
 
+    const auto now = std::chrono::steady_clock::now();
+    const Link &link = links[wcid - 1];
+    const auto ago = [&now](std::chrono::steady_clock::time_point time) {
+        return time == std::chrono::steady_clock::time_point{} ? -1LL :
+            static_cast<long long>(std::chrono::duration_cast<
+                std::chrono::milliseconds>(now - time).count());
+    };
+
+    Log::info(
+        "Controller '%d' disconnected (%s): last packet %lld ms ago, "
+        "signal %d (worst %d), rumble %lld ms ago",
+        wcid, reason, ago(link.lastPacket), link.rssi, link.worstRssi,
+        ago(link.lastRumble)
+    );
+
     if (!removeClient(wcid))
     {
         Log::error("Failed to remove controller");
-
-        return;
     }
-
-    Log::info("Controller '%d' disconnected", wcid);
 }
 
 void Dongle::handleControllerPair(Bytes address, const Bytes &packet)
@@ -155,7 +177,7 @@ void Dongle::handleControllerPair(Bytes address, const Bytes &packet)
     );
 }
 
-void Dongle::handleControllerPacket(uint8_t wcid, const Bytes &packet)
+void Dongle::handleControllerPacket(uint8_t wcid, int8_t rssi, const Bytes &packet)
 {
     // Invalid WCID
     if (wcid == 0 || wcid > MT_WCID_COUNT)
@@ -178,6 +200,22 @@ void Dongle::handleControllerPacket(uint8_t wcid, const Bytes &packet)
     if (!controllers[wcid - 1])
     {
         return;
+    }
+
+    Link &link = links[wcid - 1];
+    const auto now = std::chrono::steady_clock::now();
+
+    link.lastPacket = now;
+    link.rssi = rssi;
+    link.worstRssi = std::min(link.worstRssi, rssi);
+
+    // Signal every 5 minutes, to see it fade before a drop
+    if (now - link.lastReport >= std::chrono::minutes(5))
+    {
+        Log::info("Controller '%d' signal: %d (worst %d)", wcid, rssi, link.worstRssi);
+
+        link.lastReport = now;
+        link.worstRssi = rssi;
     }
 
     if (!controllers[wcid - 1]->handlePacket(data))
@@ -227,7 +265,7 @@ void Dongle::handleWlanPacket(const Bytes &packet)
             // They associate, disassociate and associate again during pairing
             // Disassociations happen without triggering EVT_CLIENT_LOST
             case MT_WLAN_DISASSOCIATION:
-                handleControllerDisconnect(rxWi->wcid);
+                handleControllerDisconnect(rxWi->wcid, "controller left");
                 break;
 
             // Reserved frames are used for different purposes
@@ -250,7 +288,11 @@ void Dongle::handleWlanPacket(const Bytes &packet)
             sizeof(RxWi) + sizeof(WlanFrame)
         );
 
-        handleControllerPacket(rxWi->wcid, innerPacket);
+        handleControllerPacket(
+            rxWi->wcid,
+            static_cast<int8_t>(rxWi->rssi[0]),
+            innerPacket
+        );
     }
 }
 
@@ -283,7 +325,7 @@ void Dongle::handleBulkData(const Bytes &data)
 
             case EVT_CLIENT_LOST:
                 // Packet is guaranteed not to be empty
-                handleControllerDisconnect(packet[0]);
+                handleControllerDisconnect(packet[0], "lost by the dongle");
                 break;
         }
     }

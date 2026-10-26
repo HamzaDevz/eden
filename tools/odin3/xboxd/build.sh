@@ -9,6 +9,6 @@ OUT=$(mktemp -d)
     -static-libstdc++ -pthread -s \
     xboxd.cpp dongle.cpp mt76.cpp gip.cpp usb.cpp controller.cpp -o "$OUT/xboxd"
 adb shell mkdir -p /data/local/tmp/odin3-xbox
-adb push "$OUT/xboxd" /data/local/tmp/odin3-xbox/xboxd
+adb push "$OUT/xboxd" keep.sh /data/local/tmp/odin3-xbox/
 adb push odin3-xbox.sh /sdcard/Download/odin3-xbox.sh
 rm -r "$OUT"

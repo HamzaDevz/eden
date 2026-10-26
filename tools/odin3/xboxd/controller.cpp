@@ -74,7 +74,8 @@ void Controller::statusReceived(uint8_t id, const StatusData* status) {
     if (status->batteryType == BATT_TYPE_CHARGING || level == batteryLevel) {
         return;
     }
-    Log::info("Controller %d battery level: %s", slot, levels[level]);
+    Log::info("Controller %d battery level: %s (%s)", slot, levels[level],
+              status->batteryType == BATT_TYPE_NIMH ? "rechargeable" : "alkaline");
     batteryLevel = level;
 }
 

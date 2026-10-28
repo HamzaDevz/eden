@@ -414,7 +414,16 @@ void PresentManager::CopyToSwapchain(Frame* frame) {
             // Draw to swapchain.
             return CopyToSwapchainImpl(frame);
         } catch (const vk::Exception& except) {
-            if (except.GetResult() != VK_ERROR_SURFACE_LOST_KHR) {
+            const VkResult result = except.GetResult();
+#ifdef __ANDROID__
+            // The window can be gone for a while (keyguard, HDMI link drop): recreating the
+            // surface or swapchain then fails, so drop frames until a window is back instead
+            // of aborting.
+            const bool window_gone = requires_recreation && result != VK_ERROR_DEVICE_LOST;
+#else
+            const bool window_gone = false;
+#endif
+            if (result != VK_ERROR_SURFACE_LOST_KHR && !window_gone) {
                 throw;
             }
 

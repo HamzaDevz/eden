@@ -10,6 +10,7 @@
 #include <filesystem>
 #include <fstream>
 #include <optional>
+#include <string_view>
 #include <thread>
 #include "common/container/unordered_map.h"
 #include "common/container/unordered_set.h"
@@ -532,7 +533,13 @@ Device::Device(VkInstance instance_, vk::PhysicalDevice physical_, VkSurfaceKHR 
                                VK_KHR_SHADER_ATOMIC_INT64_EXTENSION_NAME);
         features.shader_atomic_int64.shaderBufferInt64Atomics = false;
         features.shader_atomic_int64.shaderSharedInt64Atomics = false;
-        features.features.shaderInt64 = false;
+        // Adreno 8xx runs 64-bit integer shaders fine, and without them every global memory
+        // fallback (untracked storage buffers) reads zero and drops its writes.
+        if (std::string_view{properties.properties.deviceName}.starts_with("Adreno (TM) 8")) {
+            LOG_INFO(Render_Vulkan, "Keeping shaderInt64 on Adreno 8xx for global memory fallbacks");
+        } else {
+            features.features.shaderInt64 = false;
+        }
         LOG_WARNING(Render_Vulkan, "Qualcomm drivers have broken workgroup memory explicit layout.");
         RemoveExtensionFeature(extensions.workgroup_memory_explicit_layout,
                                features.workgroup_memory_explicit_layout,

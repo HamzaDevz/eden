@@ -20,6 +20,11 @@ STAGE_WATCH = "watch stage 4 main+0x532a9d8 0 0x148 8"
 # Static player table, one 0x260 entry per slot in FighterManager entry order: name tag in
 # UTF-16 at +0x28 (10 characters), empty for CPUs.
 PLAYERS, PLAYER_SIZE, NAME = 0x52c5730, 0x260, 0x28
+# Static character select cards, one 0x1c8 entry per card (the 1-based card number at +0): u32
+# kind at +8, ui_chara hash40 of the fighter at +0x10 (ui_chara_random until one is picked).
+CARDS, CARD_SIZE, CARD_KIND, CARD_CHARA = 0x5308798, 0x1c8, 0x8, 0x10
+HUMAN, CPU, NO_CARD = 0, 1, 3
+MARIO = 0x0edaf3c863  # hash40("ui_chara_mario")
 
 ACC = (0x4160, 0x20)  # current fighter, then its BattleObjectModuleAccessor
 
@@ -67,6 +72,24 @@ def watch_all(bridge, players, work=False):
             chain = " ".join(f"{o:#x}" for o in (0, 0x20 + i * 8, *offs))
             bridge.ask(f"watch {i}{name} {length:#x} {FIGHTER_MANAGER} {chain}", "ok")
         bridge.ask(f"watch {i}tag 0x14 main+{PLAYERS + i * PLAYER_SIZE + NAME:#x}", "ok")
+
+
+def watch_cards(bridge):
+    for i in range(8):
+        bridge.ask(f"watch {i}card 0x18 main+{CARDS + i * CARD_SIZE:#x}", "ok")
+
+
+def cards(frame):
+    """Kind and fighter hash40 of each character select card that is not closed."""
+    out = {}
+    for i in range(8):
+        raw = frame.watches.get(f"{i}card")
+        if raw:
+            kind = int.from_bytes(raw[CARD_KIND:CARD_KIND + 4], "little")
+            if kind != NO_CARD:
+                chara = int.from_bytes(raw[CARD_CHARA:CARD_CHARA + 8], "little")
+                out[i] = kind, chara & (1 << 40) - 1
+    return out
 
 
 def names(frame, players):

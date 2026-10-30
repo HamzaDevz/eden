@@ -3,7 +3,8 @@
 
 // Standalone driver for the Odin 3, run as root from AYN's "Run script as Root". Each controller
 // becomes a uinput gamepad that every app sees, like xow on Linux. It also brings back the dock's
-// USB host, which the firmware drops as soon as a dock's DisplayPort starts.
+// USB host, which the firmware drops as soon as a dock's DisplayPort starts, and turns off the
+// Bluetooth controllers left untouched.
 
 #include <algorithm>
 #include <array>
@@ -35,6 +36,7 @@
 
 #include "dongle.h"
 #include "log.h"
+#include "pads.h"
 
 namespace {
 constexpr const char* ROLE_PATH = "/sys/class/usb_role/a600000.ssusb-role-switch/role";
@@ -53,6 +55,9 @@ constexpr int MAX_RUMBLE = 100;
 
 // Polls the firmware takes to settle DisplayPort, it drops the USB host right after
 constexpr int DISPLAY_PORT_SETTLE_POLLS = 2;
+
+// Hamza's pick for turning off a Bluetooth controller nobody touches
+constexpr std::chrono::minutes PAD_IDLE_LIMIT{30};
 
 // GIP report bits and the keys they stand for, as xow reports them
 constexpr std::array<std::pair<uint32_t, uint16_t>, 11> BUTTONS = {{
@@ -497,9 +502,11 @@ int main(int argc, char** argv) {
     std::thread rumble_thread(ProcessRumble);
     {
         Session session(firmware_dir);
+        BluetoothPads pads(PAD_IDLE_LIMIT);
         while (!quit) {
             KeepDockUsb();
             session.Update();
+            pads.Update();
             std::this_thread::sleep_for(std::chrono::seconds(1));
         }
     }

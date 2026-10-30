@@ -168,6 +168,10 @@ public:
         setup.ff_effects_max = MAX_FEEDBACK_EFFECTS;
         std::snprintf(setup.name, sizeof(setup.name), "Xbox Wireless Controller");
         Check(ioctl(fd, UI_DEV_SETUP, &setup), "setting up the gamepad");
+        // Android merges input devices with the same ids and location into one device
+        char phys[32];
+        std::snprintf(phys, sizeof(phys), "xboxd/slot%d", slot);
+        Check(ioctl(fd, UI_SET_PHYS, phys), "naming the gamepad's location");
         Check(ioctl(fd, UI_DEV_CREATE), "creating the gamepad");
 
         stop_fd = eventfd(0, EFD_CLOEXEC);

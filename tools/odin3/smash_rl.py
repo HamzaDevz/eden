@@ -2,7 +2,8 @@
 """Ultimus: reinforcement on top of smash_bc.py, by advantage weighted regression (needs torch).
 
 Every recorded frame, seen from each fighter, gets a reward: damage dealt minus damage taken
-(per 100 %), plus or minus one per stock taken or lost. The value head learns the discounted
+(per 100 %), plus or minus one per stock taken or lost, and WIN more for the last stock taken,
+which wins the match. The value head learns the discounted
 return. The policy imitates every move of the CPU level 9 matches (~/smash-ai/rec), and in
 Ultimus' own matches (~/smash-ai/play, half of each batch) only the moves that did better
 than the value head expected, weighted by exp(advantage / beta).
@@ -45,6 +46,8 @@ EDGE = 80
 # At level 3 it came back 73 % of the time (the CPU 96 %), with no up B in 62 % of the falls
 # it lost, or later and lower (y -66, -33 when it came back): half of each batch, not a quarter.
 FOCUS = 0.5
+# What counts is winning (Hamza): the last stock taken is worth a whole match of lives.
+WIN = 3
 
 
 def log(*args):
@@ -59,7 +62,10 @@ def gain(v):
 def reward(d, me):
     other = 1 - me
     r = (gain(d["damage"][:, other]) - gain(d["damage"][:, me])) / 100
-    return r + gain(-d["stock"][:, other]) - gain(-d["stock"][:, me])
+    stock = d["stock"][:, other]
+    taken = gain(-stock)
+    won = taken * (np.append(stock[1:], stock[-1:]) == 0)
+    return r + taken + WIN * won - gain(-d["stock"][:, me])
 
 
 def offstage(d, me):

@@ -25,6 +25,7 @@ BINS = 9  # stick values -1 .. 1 by 0.25
 BUTTON_BITS = (0, 1, 2, 3)  # CONTROL_PAD_BUTTON attack, special, jump, guard
 CONT = 2 * 10 + 2  # per fighter continuous features, then the relative position
 STAGES = (0, 3)  # Battlefield, Final Destination
+EDGE = 80  # |x| of both stages' ledges
 
 
 def fighter_features(d, i, sign):
@@ -113,6 +114,41 @@ class Agent:
     def reset(self):
         self.h, self.prev = None, None
         self.stick, self.buttons = [BINS // 2] * 2, [0.0] * len(BUTTON_BITS)
+        self.recovery = self.since = self.jumps = 0  # recovery 0 drifting, 1 jumped, 2 up special
+        self.rose = False
+
+    def recover(self, me, prev):
+        """Mario's way back to the stage, or None while the model plays.
+
+        The model falls on its own (it comes back about half the time, the CPU 96 %): once off
+        the stage, drift toward the ledge, jump when falling, then up special once close enough
+        or low, as the CPU does around y -50."""
+        ax = abs(me.x)
+        if me.situation != 2 or ax < EDGE - 2 and me.y > -5:
+            self.recovery = self.jumps = 0
+            return None
+        if ax <= EDGE + 5 and me.y > -5:
+            return None  # just above the ledge
+        if me.damage > prev.damage:
+            self.recovery = min(self.recovery, 1)  # a hit gives the up special back
+        side = 1 if me.x > 0 else -1
+        # Under the stage, out past the ledge first.
+        lx = side if ax < EDGE + 3 and me.y < -5 else -side if ax > EDGE + 8 else 0
+        falling, self.since = me.y < prev.y, self.since + 1
+        self.rose |= me.y > prev.y
+        low = me.y < -45
+        if self.recovery == 0 and falling and not self.buttons[2]:
+            self.recovery, self.since, self.rose, self.jumps = 1, 0, False, self.jumps + 1
+            return 0x4, lx, 0  # jump
+        if self.recovery == 1 and not self.rose and self.since > 8 and self.jumps < 3 and not low:
+            self.recovery = 0  # still in hitstun, or no jump left: try again
+        elif self.recovery == 1 and self.since > 4 and falling and (ax < EDGE + 15 and me.y < 0 or low):
+            self.recovery, self.since = 2, 0
+            return 0x2, lx * 0.25, 1  # up special, a little toward the stage
+        return 0, lx, 0
+
+    def pad(self, mask, lx, ly):
+        return mask, int(lx * 32767), int(ly * 32767)
 
     @torch.no_grad()
     def act(self, fighters):
@@ -136,10 +172,17 @@ class Agent:
         self.stick = [int(self.rng.choice(BINS, p=p / p.sum())) for p in probs]
         bprobs = torch.sigmoid(blogits[0, 0]).numpy()
         self.buttons = [float(self.rng.random() < p) for p in bprobs]
+        back = self.recover(me, prev.get(self.me, me))
+        if back:
+            mask, lx, ly = back
+            # What it sends is the model's previous pad on the next frame.
+            self.stick = [int(round(v * (BINS // 2))) + BINS // 2 for v in (lx, ly)]
+            self.buttons = [float(bool(mask & m)) for m in (0x1, 0x2, 0x4, 0x200)]
+            return self.pad(mask, lx, ly)
         # attack A, special B, jump X, guard ZR
         mask = sum(m for m, on in zip((0x1, 0x2, 0x4, 0x200), self.buttons) if on)
         lx, ly = ((s - BINS // 2) / (BINS // 2) for s in self.stick)
-        return mask, int(lx * 32767), int(ly * 32767)
+        return self.pad(mask, lx, ly)
 
 
 def load(path):

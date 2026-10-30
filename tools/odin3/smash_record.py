@@ -14,10 +14,10 @@ to a player on the character select and its controller is the model's for the ma
 Offline only, never against people online: it stops when the other player is not a CPU,
 unless --sparring (local humans) or --selfplay (the model plays every human slot). With
 --players 4 (up to 8) it also plays matches of three or more, kept in ~/smash-ai/party.
-With --pad P instead of a name tag (a CPU cannot have one), it plays through controller P,
-its own (player 8 is connected without a pad in Smash's game config): it joins on the
-character select and picks Mario, then finds its fighter at the start of each match by
-swinging its stick until one fighter's stick follows.
+With --pad P, when no player carries the tag (a CPU cannot have one), it plays through
+controller P, its own (player 8 is connected without a pad in Smash's game config): it joins
+on the character select and picks Mario, then finds its fighter at the start of each match
+by swinging its stick until one fighter's stick follows.
 Matches with the model go to ~/smash-ai/play, the others to ~/smash-ai/rec. It also stops
 once smash_rl.py writes "selfplay" in ~/smash-ai/phase, for the CPU slot to become a player.
 
@@ -152,7 +152,7 @@ def main():
     unreached = 0  # character selects missed in a row
     refs, mario, css_seen = smash_farm.load_refs(), np.load(smash_farm.MARIO).astype(np.float32), 0
     quiet, quiet_until = set(), 0  # slots the agent played, their last input still shows a while
-    own = lambda i: i if a.pad is None else a.pad  # the controller playing slot i
+    pads = {}  # the controller playing each slot the agent plays
     probe, joined, join_steps, next_look, seen = None, False, [], 0, None  # with --pad
     try:
         for line in b.frames(raw=True):
@@ -167,12 +167,13 @@ def main():
             fighters = smash_state.parse(f, a.players) if fighting else {}
             if out is None and fighters and len(fighters) == min(count, a.players):
                 tags = smash_state.names(f, a.players)
-                me = (next((i for i, t in tags.items() if t == a.name), None)
-                      if a.agent and a.pad is None else None)
+                me = next((i for i, t in tags.items() if t == a.name and i in fighters), None) \
+                    if a.agent else None
                 if a.agent and a.pad is None and me is None:  # a match to learn nothing from
                     log(f"no player named {a.name}, stopping")
                     return
-                active, probe = {}, [] if a.agent and a.pad is not None else None
+                # A tagged player goes through its own controller, else --pad looks for its fighter.
+                active, probe = {}, [] if a.agent and a.pad is not None and me is None else None
                 if me is not None:
                     for i, x in fighters.items():
                         if i != me and not x.cpu and not a.sparring and not a.selfplay:
@@ -182,6 +183,7 @@ def main():
                             if i not in agents:
                                 agents[i] = Agent(a.agent, i)
                             active[i] = agents[i]
+                pads = {i: i for i in active}
                 # Matches of more than two or with people stay apart: training reads one on one
                 # against the CPU only.
                 folder = a.out or ("~/smash-ai/party" if len(fighters) > 2 or probe is not None else
@@ -214,7 +216,7 @@ def main():
                     matches += 1
                     for i, ag in active.items():
                         ag.reset()
-                        b.release(own(i))
+                        b.release(pads[i])
                     if probe is not None:  # it was not in this match
                         b.release(a.pad)
                         probe, joined = None, False
@@ -250,7 +252,7 @@ def main():
                     log(f"{a.name} is player {me + 1}")
                     if me not in agents:
                         agents[me] = Agent(a.agent, me)
-                    active, probe, joined = {me: agents[me]}, None, True
+                    active, pads, probe, joined = {me: agents[me]}, {me: a.pad}, None, True
                 elif len(probe) >= PROBE_FRAMES:
                     log(f"no fighter follows controller {a.pad + 1}: {a.name} is not in this match")
                     b.release(a.pad)
@@ -261,7 +263,7 @@ def main():
             if active and len(fighters) > 1:
                 for i, ag in active.items():
                     if i in fighters:
-                        b.pad(own(i), *ag.act(fighters))
+                        b.pad(pads[i], *ag.act(fighters))
 
             if a.pad is not None and a.agent:
                 if join_steps:
@@ -270,8 +272,11 @@ def main():
                         b.release(a.pad)
                         joined = True
                 elif not joined and count == 0 and f.index >= next_look:
-                    # Its presses anywhere but on the character select could open a menu.
                     next_look = f.index + LOOK_EVERY
+                    if a.name in smash_state.names(f, a.players).values():
+                        joined = True  # a player carries its tag, its controller will do
+                        continue
+                    # Its presses anywhere but on the character select could open a menu.
                     shot = smash_farm.grab(b)
                     name, dist = smash_farm.screen(shot[0], refs) if shot else ("none", 0)
                     if name == "css":
@@ -369,7 +374,7 @@ def main():
             out.close()
             os.rename(path + ".part", path)
             log(f"partial match kept: {path}")
-        for i in {0, *map(own, agents), *([] if a.pad is None else [a.pad])}:
+        for i in {0, *agents, *([] if a.pad is None else [a.pad])}:
             b.release(i)
         if a.release_lock:
             subprocess.run([ADB, "shell", "rm", "-f", LOCK])

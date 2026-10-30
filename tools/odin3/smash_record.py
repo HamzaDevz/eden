@@ -287,13 +287,16 @@ def main():
                     if not join_steps:
                         b.release(a.pad)
                         now = smash_state.cards(f)
-                        if card is None:  # the CPU card it took is a human one now
+                        if card is None:  # the CPU's card, or a free one Smash gave first
                             card = next((i for i, (kind, _) in now.items()
                                          if kind == smash_state.HUMAN
-                                         and before.get(i, (None,))[0] == smash_state.CPU), None)
-                        if card is None:
-                            log(f"controller {a.pad + 1} took no CPU card")
-                            tried = now
+                                         and before.get(i, (None,))[0] != smash_state.HUMAN), None)
+                            if card is None:
+                                # Its hand is already there: a pick would grab a CPU's token.
+                                log(f"controller {a.pad + 1} took no card")
+                                tried = now
+                            else:
+                                join_steps = pick_path(PICK_DOWNS[0]) + SETTLE
                         elif now.get(card, (None, None))[1] == smash_state.MARIO:
                             log(f"{a.name} plays card {card + 1} with Mario")
                         elif tries + 1 < len(PICK_DOWNS):
@@ -305,19 +308,21 @@ def main():
                 elif count == 0 and f.index >= next_look:
                     next_look = f.index + LOOK_EVERY
                     now = smash_state.cards(f)
+                    if card is not None and now.get(card, (None,))[0] != smash_state.HUMAN:
+                        card = None  # its card was closed or given back to a CPU
                     cpu_mario = [i for i, c in now.items()
                                  if c == (smash_state.CPU, smash_state.MARIO)]
                     # A tagged player plays through its own controller; a failed try waits for the
                     # cards to change.
                     tagged = a.name in smash_state.names(f, a.players).values()
-                    if cpu_mario and now != tried and not tagged:
+                    if cpu_mario and card is None and now != tried and not tagged:
                         # Its presses anywhere but on the character select could open a menu.
                         shot = smash_farm.grab(b)
                         name, dist = smash_farm.screen(shot[0], refs) if shot else ("none", 0)
                         if name in ("css", "ready"):
                             log(f"{a.name} takes the CPU Mario of card {cpu_mario[0] + 1}")
                             before, card, tries = now, None, 0
-                            join_steps = JOIN + pick_path(PICK_DOWNS[0]) + SETTLE
+                            join_steps = JOIN + SETTLE
                         elif name != seen:
                             log(f"screen {name} ({dist:.0f}): {a.name} waits for the character select")
                         seen = name

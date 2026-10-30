@@ -98,9 +98,13 @@ def screen(g, refs):
     name = min(refs, key=lambda n: np.abs(g - refs[n]).mean())
     d = np.abs(g - refs[name]).mean()
     if d >= 25:
-        # More cards, or other fighters on them: the title bar alone still tells.
-        d = np.abs(g[:ROSTER.start] - refs["css"][:ROSTER.start]).mean()
-        return ("css" if d < 8 else "unknown"), d
+        # More cards, or other fighters on them: the title bar alone still tells, dimmed under
+        # the ready banner.
+        for name in ("css", "ready"):
+            d = np.abs(g[:ROSTER.start] - refs[name][:ROSTER.start]).mean()
+            if d < 8:
+                return name, d
+        return "unknown", d
     return name, d
 
 

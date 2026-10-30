@@ -19,7 +19,7 @@ import smash_state
 from bridge import Frame
 
 SCALARS = ("kind", "cpu", "stock", "x", "y", "lr", "damage", "status", "situation",
-           "motion_frame", "stick_x", "stick_y", "buttons", "slots", "slot")
+           "motion_frame", "stick_x", "stick_y", "buttons", "slots", "slot", *smash_state.EYES)
 WORK = {"wf0": "<120f", "wf1": "<40f", "wi0": "<270q", "wi1": "<32q", "wb0": "<9I", "wb1": "<3I"}
 
 
@@ -67,7 +67,12 @@ def load(path):
             os.remove(tmp)
         return d
     with np.load(cache) as z:
-        return dict(z)
+        d = dict(z)
+    if "shield" not in d:  # cached before the eyes: from the whole arrays when they were recorded
+        for name, (table, j) in smash_state.EYES.items():
+            d[name] = (d[table][..., j].astype(np.float32) if d[table].any()
+                       else np.full(d["x"].shape, np.nan, np.float32))
+    return d
 
 
 def recordings(rec):

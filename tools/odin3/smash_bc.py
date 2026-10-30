@@ -18,12 +18,14 @@ import torch
 from torch import nn
 
 import smash_dataset
+import smash_state
 
 DELAY = 3
 KINDS, STATUSES, MOTIONS = 128, 1024, 8192
 BINS = 9  # stick values -1 .. 1 by 0.25
 BUTTON_BITS = (0, 1, 2, 3)  # CONTROL_PAD_BUTTON attack, special, jump, guard
 CONT = 2 * 10 + 2  # per fighter continuous features, then the relative position
+SIGHT = 2 * 5 + 2  # then since 31/10, what the state alone hid: per fighter, then the stage
 STAGES = (0, 3)  # Battlefield, Final Destination
 EDGE = 80  # |x| of both stages' ledges
 
@@ -43,6 +45,14 @@ def fighter_features(d, i, sign):
     return cont.astype(np.float32), cat.astype(np.int64)
 
 
+def sight(d, i):
+    """Distance to the nearer ledge (below 0 off the stage), jumps used, hitstun frames left,
+    shield health and standing on a platform."""
+    return np.stack([(EDGE - np.abs(d["x"][:, i])) / 100, np.minimum(d["jumps"][:, i], 6) / 3,
+                     np.clip(d["hitstun"][:, i], 0, 180) / 60, d["shield"][:, i] / 50,
+                     (d["situation"][:, i] == 0) & (d["y"][:, i] > 5)], 1).astype(np.float32)
+
+
 def actions(d, i, sign):
     """Pad of fighter i: stick bins (T, 2) and buttons (T, 4)."""
     bins = lambda v: np.clip(np.round((v + 1) * 4), 0, BINS - 1).astype(np.int64)
@@ -58,7 +68,8 @@ def perspective(d, me, sign):
     c0, k0 = fighter_features(d, me, sign)
     c1, k1 = fighter_features(d, other, sign)
     rel = np.stack([c1[:, 0] - c0[:, 0], c1[:, 1] - c0[:, 1]], 1)
-    cont = np.concatenate([c0, c1, rel], 1)
+    stage = np.stack([d["stage"] == 0, d["stage"] == 3], 1).astype(np.float32)
+    cont = np.concatenate([c0, c1, rel, sight(d, me), sight(d, other), stage], 1)
     cat = np.concatenate([k0, k1], 1)
     stick, buttons = actions(d, me, sign)
     return cont, cat, stick, buttons
@@ -71,7 +82,7 @@ class Policy(nn.Module):
         self.status = nn.Embedding(STATUSES, 32)
         self.motion = nn.Embedding(MOTIONS, 32)
         self.prev_stick = nn.Embedding(BINS, 8)
-        width = CONT + 2 * (16 + 32 + 32) + 2 * 8 + len(BUTTON_BITS)
+        width = CONT + SIGHT + 2 * (16 + 32 + 32) + 2 * 8 + len(BUTTON_BITS)
         self.inp = nn.Sequential(nn.Linear(width, hidden), nn.ReLU(), nn.Dropout(0.2),
                                  nn.Linear(hidden, hidden), nn.ReLU(), nn.Dropout(0.2))
         self.gru = nn.GRU(hidden, hidden, batch_first=True)
@@ -93,7 +104,7 @@ class Policy(nn.Module):
 class Agent:
     """Plays fighter `me` with a trained Policy, one step per bridge frame."""
     STATE = ("kind", "status", "situation", "x", "y", "lr", "damage", "stock", "motion_frame",
-             "stick_x", "stick_y", "buttons")
+             "stick_x", "stick_y", "buttons", *smash_state.EYES)
 
     def __init__(self, path, me):
         self.path, self.mtime = os.path.expanduser(path), None
@@ -163,6 +174,7 @@ class Agent:
         d = {k: np.array([[getattr(r.get(i, fighters[i]), k) for i in (self.me, other)]
                           for r in (prev, fighters)], np.uint64 if k == "motion" else np.float32)
              for k in self.STATE + ("motion",)}
+        d["stage"] = np.full(2, me.stage)
         cont, cat, _, _ = perspective(d, 0, 1)
         t = lambda a, dt: torch.tensor(np.asarray(a)[None, None], dtype=dt)
         logits, blogits, _, self.h = self.model(
@@ -186,10 +198,14 @@ class Agent:
 
 
 def load(path):
-    """Policy from a checkpoint; imitation ones have no value head yet."""
+    """Policy from a checkpoint; imitation ones have no value head yet, older ones no sight: its
+    inputs start unused, so the model plays as before until training weighs them."""
     checkpoint = torch.load(path, map_location="cpu")
-    model = Policy()
-    model.load_state_dict(checkpoint["state"], strict=False)
+    model, state = Policy(), checkpoint["state"]
+    w = state["inp.0.weight"]
+    if w.shape[1] == model.inp[0].in_features - SIGHT:
+        state["inp.0.weight"] = torch.cat([w[:, :CONT], w.new_zeros(len(w), SIGHT), w[:, CONT:]], 1)
+    model.load_state_dict(state, strict=False)
     model.version = checkpoint.get("version")  # set by smash_rl.py, which compares versions
     return model
 
@@ -204,7 +220,9 @@ def sequences(paths, extra=None, sides=None):
         d = {k: v[ok] for k, v in d.items() if v.ndim and len(v) == len(ok)}
         stage = d.get("stage", np.zeros(0))  # absent from recordings made before it was read
         stages = set(stage[stage >= 0].tolist())
-        if len(d["frame"]) < 200 or d["slots"].max() > 1 or stages - set(STAGES):
+        # Ultimus' matches recorded before its sight have none to learn from.
+        if (len(d["frame"]) < 200 or d["slots"].max() > 1 or stages - set(STAGES)
+                or np.isnan(d["shield"]).any()):
             continue
         for me in [sides[path]] if sides else (0, 1):
             more = () if extra is None else (extra(d, me)[DELAY:],)

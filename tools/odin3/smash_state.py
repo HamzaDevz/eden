@@ -9,6 +9,7 @@ followed yet).
   smash_state.py [--players 2] [--every 30]   print the state of each fighter
 """
 import argparse
+import math
 import struct
 
 from bridge import Bridge
@@ -51,11 +52,16 @@ WORK = {
     "wi1": (0x100, (*ACC, 0x50, 0x18, 8, 0x20, 0)),
     "wb1": (0xc, (*ACC, 0x50, 0x18, 8, 0x30, 0)),
 }
+# Single WorkModule values, watched on their own when the arrays are not: (array, index), found
+# in the CPU's matches on 31/10. Jumps used (0 on the ground, up to 6 for Kirby), hitstun frames
+# left, shield health (50 when full).
+EYES = {"jumps": ("wi0", 2), "hitstun": ("wf0", 19), "shield": ("wf0", 6)}
 
 
 class Fighter:
     __slots__ = ("kind", "cpu", "stock", "x", "y", "lr", "damage", "status", "situation",
-                 "motion", "motion_frame", "stick_x", "stick_y", "buttons", "slots", "slot")
+                 "motion", "motion_frame", "stick_x", "stick_y", "buttons", "slots", "slot",
+                 "jumps", "hitstun", "shield", "stage")
 
     def __str__(self):
         return (f"kind {self.kind:#04x}{' cpu' if self.cpu else ''} stock {self.stock} "
@@ -71,6 +77,10 @@ def watch_all(bridge, players, work=False):
         for name, (length, offs) in fields.items():
             chain = " ".join(f"{o:#x}" for o in (0, 0x20 + i * 8, *offs))
             bridge.ask(f"watch {i}{name} {length:#x} {FIGHTER_MANAGER} {chain}", "ok")
+        for name, (table, j) in EYES.items():
+            size = 8 if table.startswith("wi") else 4
+            chain = " ".join(f"{o:#x}" for o in (0, 0x20 + i * 8, *WORK[table][1][:-1], j * size))
+            bridge.ask(f"watch {i}{name} {size:#x} {FIGHTER_MANAGER} {chain}", "ok")
         bridge.ask(f"watch {i}tag 0x14 main+{PLAYERS + i * PLAYER_SIZE + NAME:#x}", "ok")
 
 
@@ -102,7 +112,7 @@ def names(frame, players):
 
 
 def parse(frame, players):
-    fighters = {}
+    fighters, stage = {}, frame.watches.get("stage")
     for i in range(players):
         w = {name: frame.watches.get(f"{i}{name}") for name in FIELDS}
         if any(v is None for v in w.values()):
@@ -119,6 +129,12 @@ def parse(frame, players):
         f.stick_x, f.stick_y = struct.unpack_from("<ff", w["ctrl"])
         f.buttons = struct.unpack_from("<I", w["ctrl"], 0x6c)[0]
         f.slots, f.slot = struct.unpack("<Q", w["slots"])[0], w["slot"][0]
+        for name, (table, j) in EYES.items():
+            size, raw = 8 if table.startswith("wi") else 4, frame.watches.get(f"{i}{name}")
+            if raw is None and frame.watches.get(f"{i}{table}"):  # recorded with the whole arrays
+                raw = frame.watches[f"{i}{table}"][j * size:(j + 1) * size]
+            setattr(f, name, struct.unpack("<q" if size == 8 else "<f", raw)[0] if raw else math.nan)
+        f.stage = int.from_bytes(stage, "little") if stage else -1
         fighters[i] = f
     return fighters
 

@@ -12,7 +12,8 @@ console battery gets low.
 With --agent, the model plays the player whose name tag is --name (Ultimus): give the tag
 to a player on the character select and its controller is the model's for the match.
 Offline only, never against people online: it stops when the other player is not a CPU,
-unless --sparring (a local human) or --selfplay (the model plays every human slot).
+unless --sparring (local humans) or --selfplay (the model plays every human slot). With
+--players 4 (up to 8) it also plays matches of three or more, kept in ~/smash-ai/party.
 Matches with the model go to ~/smash-ai/play, the others to ~/smash-ai/rec. It also stops
 once smash_rl.py writes "selfplay" in ~/smash-ai/phase, for the CPU slot to become a player.
 
@@ -132,10 +133,10 @@ def main():
             if (count, ready, result) != flags:
                 flags = (count, ready, result)
                 log(f"fighters {count} ready_go {ready} result {result}")
-            fighting = count >= a.players and not result and f.watches.get("0pos") is not None
+            fighting = count >= 2 and not result and f.watches.get("0pos") is not None
 
             fighters = smash_state.parse(f, a.players) if fighting else {}
-            if out is None and len(fighters) == a.players:
+            if out is None and fighters and len(fighters) == min(count, a.players):
                 tags = smash_state.names(f, a.players)
                 me = next((i for i, t in tags.items() if t == a.name), None) if a.agent else None
                 if a.agent and me is None:  # its pad would stay idle, a match to learn nothing from
@@ -151,7 +152,9 @@ def main():
                             if i not in agents:
                                 agents[i] = Agent(a.agent, i)
                             active[i] = agents[i]
-                folder = a.out or ("~/smash-ai/play" if active else "~/smash-ai/rec")
+                # Matches of more than two stay apart: training reads one on one only.
+                folder = a.out or ("~/smash-ai/party" if len(fighters) > 2 else
+                                   "~/smash-ai/play" if active else "~/smash-ai/rec")
                 os.makedirs(os.path.expanduser(folder), exist_ok=True)
                 path = os.path.join(os.path.expanduser(folder), time.strftime("%Y%m%d-%H%M%S")
                                     + (f"-{a.port}" if a.port != 6560 else "") + ".txt.gz")
@@ -203,9 +206,10 @@ def main():
                             log(f"CPU level {wanted} wanted instead of {a.level}")
                             a.level, relevel = wanted, True
 
-            if active and len(fighters) == a.players:
+            if active and len(fighters) > 1:
                 for i, ag in active.items():
-                    b.pad(i, *ag.act(fighters))
+                    if i in fighters:
+                        b.pad(i, *ag.act(fighters))
 
             if not a.auto:
                 continue

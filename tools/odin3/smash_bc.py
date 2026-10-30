@@ -116,13 +116,18 @@ class Agent:
 
     @torch.no_grad()
     def act(self, fighters):
-        """Pad for the next frame: (bridge button mask, lx, ly) as npad values."""
-        now = {k: [getattr(fighters[i], k) for i in (0, 1)] for k in self.STATE + ("motion",)}
-        rows = [self.prev or now, now]
-        self.prev = now
-        d = {k: np.array([r[k] for r in rows], np.uint64 if k == "motion" else np.float32)
-             for k in now}
-        cont, cat, _, _ = perspective(d, self.me, 1)
+        """Pad for the next frame: (bridge button mask, lx, ly) as npad values.
+
+        Trained one on one: with more fighters, it faces the nearest one still in the match."""
+        me = fighters[self.me]
+        others = [i for i in fighters if i != self.me]
+        other = min([i for i in others if fighters[i].stock > 0] or others,
+                    key=lambda i: (fighters[i].x - me.x) ** 2 + (fighters[i].y - me.y) ** 2)
+        prev, self.prev = self.prev or fighters, fighters
+        d = {k: np.array([[getattr(r.get(i, fighters[i]), k) for i in (self.me, other)]
+                          for r in (prev, fighters)], np.uint64 if k == "motion" else np.float32)
+             for k in self.STATE + ("motion",)}
+        cont, cat, _, _ = perspective(d, 0, 1)
         t = lambda a, dt: torch.tensor(np.asarray(a)[None, None], dtype=dt)
         logits, blogits, _, self.h = self.model(
             t(cont[-1], torch.float32), t(cat[-1], torch.long), t(self.stick, torch.long),

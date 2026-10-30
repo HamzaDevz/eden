@@ -232,6 +232,14 @@ ButtonMapping Android::GetButtonMappingForDevice(const Common::ParamPackage& par
     // Some devices use axes instead of buttons for certain controls so we need all the axes here
     std::set<s32> axes = GetDeviceAxes(env, j_device);
 
+    // AYN's uinput copies of external controllers report Xbox labels, unlike its built-in pad
+    const auto j_name = static_cast<jstring>(
+        env->CallObjectMethod(j_device, Common::Android::GetYuzuDeviceGetName()));
+    const bool ayn_copy = identifier.guid.RawString().ends_with(ayn_vid) &&
+                          Common::Android::GetJString(env, j_name) != ayn_built_in_name;
+    const bool flip_ab = ayn_copy || MatchVID(identifier.guid, flipped_ab_vids);
+    const bool flip_xy = ayn_copy || MatchVID(identifier.guid, flipped_xy_vids);
+
     ButtonMapping mapping = {};
     if (axes.find(AXIS_HAT_X) != axes.end() && axes.find(AXIS_HAT_Y) != axes.end()) {
         mapping.insert_or_assign(Settings::NativeButton::DUp,
@@ -273,7 +281,7 @@ ButtonMapping Android::GetButtonMappingForDevice(const Common::ParamPackage& par
     }
 
     if (available_keys.find(KEYCODE_BUTTON_A) != available_keys.end()) {
-        if (MatchVID(identifier.guid, flipped_ab_vids)) {
+        if (flip_ab) {
             mapping.insert_or_assign(Settings::NativeButton::B, BuildButtonParamPackageForButton(
                                                                     identifier, KEYCODE_BUTTON_A));
         } else {
@@ -282,7 +290,7 @@ ButtonMapping Android::GetButtonMappingForDevice(const Common::ParamPackage& par
         }
     }
     if (available_keys.find(KEYCODE_BUTTON_B) != available_keys.end()) {
-        if (MatchVID(identifier.guid, flipped_ab_vids)) {
+        if (flip_ab) {
             mapping.insert_or_assign(Settings::NativeButton::A, BuildButtonParamPackageForButton(
                                                                     identifier, KEYCODE_BUTTON_B));
         } else {
@@ -291,7 +299,7 @@ ButtonMapping Android::GetButtonMappingForDevice(const Common::ParamPackage& par
         }
     }
     if (available_keys.find(KEYCODE_BUTTON_X) != available_keys.end()) {
-        if (MatchVID(identifier.guid, flipped_xy_vids)) {
+        if (flip_xy) {
             mapping.insert_or_assign(Settings::NativeButton::Y, BuildButtonParamPackageForButton(
                                                                     identifier, KEYCODE_BUTTON_X));
         } else {
@@ -300,7 +308,7 @@ ButtonMapping Android::GetButtonMappingForDevice(const Common::ParamPackage& par
         }
     }
     if (available_keys.find(KEYCODE_BUTTON_Y) != available_keys.end()) {
-        if (MatchVID(identifier.guid, flipped_xy_vids)) {
+        if (flip_xy) {
             mapping.insert_or_assign(Settings::NativeButton::X, BuildButtonParamPackageForButton(
                                                                     identifier, KEYCODE_BUTTON_Y));
         } else {

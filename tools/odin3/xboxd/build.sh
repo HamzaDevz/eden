@@ -1,6 +1,7 @@
 #!/bin/sh
 # Builds the Xbox Wireless Adapter daemon and puts it on the console, with odin3-xbox.sh in
 # Download: Hamza runs that one from Odin settings, Advanced, "Run script as Root".
+# That runs each line on its own and fails lines longer than about 255 characters.
 set -e
 cd "$(dirname "$0")"
 NDK=${ANDROID_NDK:-$HOME/Library/Android/sdk/ndk/28.2.13676358}/toolchains/llvm/prebuilt/darwin-x86_64/bin

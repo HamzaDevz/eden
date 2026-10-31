@@ -34,6 +34,10 @@ EDGE = 80  # |x| of both stages' ledges
 # played. Not the buttons': a press is a rare event every frame, and sharpened it nearly vanished
 # (1 attack a minute, 4 to 13 % dealt a match instead of 120 to 165).
 TEMPERATURE = 0.3
+# On the stage, an attack or a special other than the fireball (stick at rest) is only pressed with
+# the other fighter within REACH on both axes. Ultimus hit with 10 % of its presses, half of its
+# misses from 30 or more away; this cuts 63 % of them and keeps 73 % of the presses that hit (31/10).
+REACH = 30
 
 
 def fighter_features(d, i, sign):
@@ -193,6 +197,11 @@ class Agent:
         self.stick = [int(self.rng.choice(BINS, p=p / p.sum())) for p in probs]
         bprobs = torch.sigmoid(blogits[0, 0]).numpy()
         self.buttons = [float(self.rng.random() < p) for p in bprobs]
+        o = fighters[other]
+        if abs(me.x) < EDGE + 5 and me.y > -5 and (abs(o.x - me.x) > REACH or abs(o.y - me.y) > REACH):
+            self.buttons[0] = 0.0
+            if self.stick != [BINS // 2] * 2:
+                self.buttons[1] = 0.0
         back = self.recover(me, prev.get(self.me, me))
         if back:
             mask, lx, ly = back

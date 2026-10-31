@@ -136,6 +136,12 @@ def main():
     fig_pads = {name: a.pad - k for k, name in enumerate((a.figs or a.name).split(","))} \
         if a.pad is not None and a.agent else {}
     pad_figs = {p: name for name, p in fig_pads.items()}
+    # An amiibo's nickname holds 10 characters: Nostradamus is Nostradamu on its card.
+    full_names = {name[:10]: name for name in fig_pads}
+
+    def card_owners(f):
+        return {i: (full_names.get(nick, nick), pad)
+                for i, (nick, pad) in smash_state.card_owners(f).items()}
 
     def agent(i, name):
         own = os.path.join(os.path.dirname(os.path.expanduser(a.agent)),
@@ -329,7 +335,7 @@ def main():
                     # The match takes the kind and controller from both tables when it starts:
                     # player cards on the AIs' controllers, built as players, Smash's FIG AI out.
                     # Read from this frame, as + may come right after the amiibo's nickname.
-                    owners, converted = smash_state.card_owners(f), {}
+                    owners, converted = card_owners(f), {}
                     for i, (kind, _) in smash_state.cards(f).items():
                         nick = owners.get(i, ("",))[0]
                         if kind == smash_state.FIG and nick in fig_pads and nick not in converted.values():
@@ -343,7 +349,7 @@ def main():
                         log("+: " + ", ".join(f"card {i + 1} is {n}'s" for i, n in converted.items()))
                 elif count == 0 and f.index >= next_look:
                     next_look = f.index + LOOK_EVERY
-                    now, owners = smash_state.cards(f), smash_state.card_owners(f)
+                    now, owners = smash_state.cards(f), card_owners(f)
                     seated, ai_figs, waiting = {}, {}, set()
                     for i, (kind, chara) in now.items():
                         nick, pad = owners.get(i, ("", -1))

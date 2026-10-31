@@ -7,7 +7,7 @@ fighter. With --auto it also drives the menus so CPU matches chain on their own:
 results, + on the character select. Set it up once with the players as CPU and a rule set
 whose stage selection is random (no stage screen; the random list holds the stages wanted),
 and never press B there: it picks up a CPU token. It stops when someone touches a controller, or when the
-console battery gets low.
+console battery gets low (exit status 3, for the caller to wait for the charger).
 
 With --agent, the model plays the player whose name tag is --name (Ultimus): give the tag
 to a player on the character select and its controller is the model's for the match.
@@ -250,7 +250,7 @@ def main():
                     level = battery() if a.min_battery else 100
                     if level < a.min_battery:
                         log(f"battery {level} %, stopping")
-                        return
+                        return 3
                     if a.matches and matches >= a.matches:
                         return
                     if a.level_file and os.path.exists(a.level_file):

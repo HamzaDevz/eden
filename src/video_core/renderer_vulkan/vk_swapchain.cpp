@@ -159,6 +159,11 @@ void Swapchain::Create(
 }
 
 bool Swapchain::AcquireNextImage() {
+    // A recreation that failed while the window was gone left no swapchain: report the surface
+    // as lost for the caller to recreate it, instead of acquiring from a null handle.
+    if (!swapchain) {
+        throw vk::Exception(VK_ERROR_SURFACE_LOST_KHR);
+    }
     const VkResult result = device.GetLogical().AcquireNextImageKHR(
         *swapchain, (std::numeric_limits<u64>::max)(), *present_semaphores[frame_index],
         VK_NULL_HANDLE, &image_index);

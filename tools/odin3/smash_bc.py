@@ -109,6 +109,9 @@ class Agent:
     def __init__(self, path, me):
         self.path, self.mtime = os.path.expanduser(path), None
         self.me, self.rng = me, np.random.default_rng()
+        # One small step per frame: more threads only spun, 12 ms a frame instead of 1.5 on the
+        # PC, and in lockstep the game waited for them.
+        torch.set_num_threads(1)
         self.reload()
         self.reset()
 

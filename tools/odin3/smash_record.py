@@ -195,7 +195,7 @@ def main():
     kinds_until, converted = 0, []  # the FIG cards made player cards on a + press
     next_ok, ok_until = 0, 0  # the AIs' A on the results
     next_plug = 0  # the next check of the AIs' controllers
-    idle = 0  # with --challengers, presses since the last fight
+    idle, no_door = 0, 0  # with --challengers, presses since the last fight, looks with no door
     try:
         for line in b.frames(raw=True):
             f = Frame(line)
@@ -460,9 +460,15 @@ def main():
                 if shot is None:
                     continue
                 g = shot[0]
-                if np.abs(g - refs["extras"]).mean() < 25 and g[DOOR].mean() < 140:
+                # Games & More fades in: its door has to stay away a few looks in a row.
+                no_door = no_door + 1 if np.abs(g - refs["extras"]).mean() < 25 \
+                    and g[DOOR].mean() < 140 else 0
+                if no_door >= 3:
                     log("no door on Games & More: every challenger met")
                     return
+                if no_door:
+                    next_press = f.index
+                    continue
                 if np.abs(g[:smash_farm.ROSTER.start] - refs["challengers"][:smash_farm.ROSTER.start]
                           ).mean() < 8 and not smash_farm.on_mario(shot[1], mario):
                     log("player 1 picks Mario for the challenger")

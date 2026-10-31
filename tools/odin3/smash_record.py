@@ -62,6 +62,7 @@ BUTTON_A, BUTTON_B, BUTTON_PLUS = 0x1, 0x2, 0x400
 # PICK_AFTER on the results: it waits for a minute without match first.
 PICK_AFTER = 4
 NAVIGATE_AFTER = 40
+DOOR = (slice(26, 32), slice(52, 58))  # Challenger's Approach's door on Games & More, 36x64
 
 
 def pick_path(down):
@@ -122,6 +123,8 @@ def main():
     ap.add_argument("--figs", help="with --pad, the AIs, comma separated (--name by default)")
     ap.add_argument("--amiibo", default=AMIIBO, help="with --pad, the folder of their <name>.bin")
     ap.add_argument("--sparring", action="store_true", help="let the agent face a local human")
+    ap.add_argument("--challengers", action="store_true", help="with --auto, from the door of "
+                    "Challenger's Approach on Games & More, the agent fights them all as Mario")
     ap.add_argument("--selfplay", action="store_true", help="the agent plays every human slot")
     ap.add_argument("--level", type=int, help="level of the CPU, kept in the match header")
     ap.add_argument("--level-file", help="CPU level to follow, read after each match: player 1 "
@@ -192,6 +195,7 @@ def main():
     kinds_until, converted = 0, []  # the FIG cards made player cards on a + press
     next_ok, ok_until = 0, 0  # the AIs' A on the results
     next_plug = 0  # the next check of the AIs' controllers
+    idle = 0  # with --challengers, presses since the last fight
     try:
         for line in b.frames(raw=True):
             f = Frame(line)
@@ -441,11 +445,38 @@ def main():
                     pressed, next_press, starts = BUTTON_A, f.index, 0
                 continue
             if fighting:
-                starts, picker = 0, None
+                starts, picker, idle = 0, None, 0
             if press_until and f.index >= press_until:
                 for i in range(a.players):
                     b.release(i)
                 press_until = 0
+            elif not fighting and a.challengers and f.index >= next_press + PRESS_EVERY:
+                # Challenger's Approach: A on its door, on the silhouette, on Mario's select and
+                # through the results or the newcomer, back to the door until it is gone.
+                shot = smash_farm.grab(b)
+                if shot is None:
+                    continue
+                g = shot[0]
+                if np.abs(g - refs["extras"]).mean() < 25 and g[DOOR].mean() < 140:
+                    log("no door on Games & More: every challenger met")
+                    return
+                if np.abs(g[:smash_farm.ROSTER.start] - refs["challengers"][:smash_farm.ROSTER.start]
+                          ).mean() < 8 and not smash_farm.on_mario(shot[1], mario):
+                    log("player 1 picks Mario for the challenger")
+                    if not smash_farm.pick_mario(b, mario, lockstep=bool(a.sync)):
+                        log("Mario not found")
+                    b.ask("stream 1", "ok")  # play stops the stream when done
+                    if a.sync:
+                        b.sync(a.sync)
+                    next_press = f.index
+                    continue
+                idle += 1
+                if idle > 40:
+                    log("no challenger fight after 40 presses, stopping")
+                    return
+                pressed = BUTTON_A
+                b.pad(0, pressed)
+                press_until, next_press = f.index + PRESS_FRAMES, f.index
             elif not fighting and f.index >= next_press + PRESS_EVERY:
                 if count == 0:
                     tags = smash_state.names(f, a.players)
@@ -456,7 +487,7 @@ def main():
                                           and a.agent and slot in (0, None)):
                         log("player 1 goes back to the character select")
                         nav = smash_farm.Instance(a.port - 6560, argparse.Namespace(
-                            cpu=[], home=os.path.expanduser("~/smash-ai")))
+                            cpu=[], figs=None, home=os.path.expanduser("~/smash-ai")))
                         nav.level = a.level or 9
                         if nav.navigate(b):
                             unreached = 0

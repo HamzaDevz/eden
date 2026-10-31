@@ -341,6 +341,8 @@ class Agent:
              for k in self.STATE + ("motion",)}
         d["stage"] = np.full(2, me.stage)
         cont, cat, _, _ = perspective(d, 0, 1)
+        # A fighter KO'd for good (one stock, as a challenger's) reads NaN until the match ends.
+        cont = np.nan_to_num(cont, posinf=0, neginf=0)
         logits, blogits, self.h = self.model.step(cont[-1], cat[-1], self.stick, self.buttons, self.h)
         probs = np.exp((logits - logits.max(-1, keepdims=True)) / TEMPERATURE)
         self.stick = [int(self.rng.choice(BINS, p=p / p.sum())) for p in probs]

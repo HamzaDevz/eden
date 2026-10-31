@@ -214,6 +214,9 @@ def main():
                 next_plug = f.index + LOOK_EVERY
 
             fighters = smash_state.parse(f, a.players) if fighting else {}
+            if a.challengers and any(x.stock == 0 for x in fighters.values()):
+                # Lost, "Continue?" keeps the flags of a match: A there takes the rematch.
+                fighting, fighters = False, {}
             if out is None and fighters and len(fighters) == min(count, a.players):
                 tags = smash_state.names(f, a.players)
                 # With --pad the AIs play the fighters on their controllers, else the tagged one.

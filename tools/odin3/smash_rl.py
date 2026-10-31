@@ -48,6 +48,11 @@ EDGE = 80
 FOCUS = 0.5
 # What counts is winning (Hamza): the last stock taken is worth a whole match of lives.
 WIN = 3
+# A stock lost with no hit taken in the 4 s before: Ultimus fell on its own. The champion of
+# 01:14 on 31/10 measured better than the one before by dealing more, yet fell so twice as
+# often (0.37 a match against 0.17): in the measure of a model, each such fall costs a stock more.
+UNHIT = 240
+SELF_DESTRUCT = 1
 
 
 def log(*args):
@@ -66,6 +71,14 @@ def reward(d, me):
     taken = gain(-stock)
     won = taken * (np.append(stock[1:], stock[-1:]) == 0)
     return r + taken + WIN * won - gain(-d["stock"][:, me])
+
+
+def self_destructs(path, me):
+    d = smash_dataset.load(path)
+    v = d["valid"].all(1)
+    dmg, stock = d["damage"][:, me], d["stock"][:, me]
+    lost = np.nonzero(v[1:] & v[:-1] & (stock[1:] < stock[:-1]))[0] + 1
+    return int(sum(not (np.diff(dmg[max(0, t - UNHIT - 1):t]) > 0).any() for t in lost))
 
 
 def offstage(d, me):
@@ -103,26 +116,52 @@ def focused_batch(seqs, hot, size, length, rng, device):
 Match = collections.namedtuple("Match", "path won score level version me lockstep")
 
 
+def result(path):
+    """Match fields after the path, None when Ultimus did not play it alone."""
+    with gzip.open(path, "rt") as f:
+        header = json.loads(f.readline()[2:])
+    me = header.get("me")
+    if me is None or len(header.get("agents", [me])) != 1:
+        return None
+    d = smash_dataset.load(path)
+    rows = d["valid"].all(1).nonzero()[0]
+    if len(rows) < 200:
+        return None
+    stock, damage = d["stock"][rows[-1]], d["damage"][rows[-1]]
+    mine, theirs = (stock[me], -damage[me]), (stock[1 - me], -damage[1 - me])
+    score = reward({k: d[k][rows] for k in ("damage", "stock")}, me).sum()
+    return (bool(mine > theirs), float(score), header.get("level") or 9, header.get("version"), int(me),
+            header.get("sync", 1) > 0)
+
+
 def results(folder):
     """Each match Ultimus played alone against the CPU, oldest first: result, total reward,
     CPU level (9 when the recorder was not told), model version, and whether the game waited
     for the agent (the PC) or not (the Odin, its pads a little late)."""
-    out = []
+    # Decoding all 16 000 matches took the loop 50 min between two models: a saved match no
+    # longer changes, its result is kept in results.json (once a minute old, the Odin's arrive
+    # by scp under their final name).
+    index = os.path.join(os.path.expanduser(folder), "results.json")
+    try:
+        with open(index) as f:
+            known = json.load(f)
+        if known.get("win") != WIN:  # scored by another reward
+            known = {}
+    except (OSError, ValueError):
+        known = {}
+    out, fresh = [], False
     for path in smash_dataset.recordings(folder):
-        with gzip.open(path, "rt") as f:
-            header = json.loads(f.readline()[2:])
-        me = header.get("me")
-        if me is None or len(header.get("agents", [me])) != 1:
-            continue
-        d = smash_dataset.load(path)
-        rows = d["valid"].all(1).nonzero()[0]
-        if len(rows) < 200:
-            continue
-        stock, damage = d["stock"][rows[-1]], d["damage"][rows[-1]]
-        mine, theirs = (stock[me], -damage[me]), (stock[1 - me], -damage[1 - me])
-        score = reward({k: d[k][rows] for k in ("damage", "stock")}, me).sum()
-        out.append(Match(path, mine > theirs, score, header.get("level") or 9, header.get("version"), me,
-                         header.get("sync", 1) > 0))
+        name = os.path.basename(path)
+        r = known[name] if name in known else result(path)
+        if name not in known and time.time() - os.path.getmtime(path) > 60:
+            known[name], fresh = r, True
+        if r:
+            out.append(Match(path, *r))
+    if fresh:
+        known["win"] = WIN
+        with open(index + ".tmp", "w") as f:
+            json.dump(known, f)
+        os.replace(index + ".tmp", index)
     return out
 
 
@@ -212,6 +251,7 @@ def loop(a):
     if not os.path.exists(champion):
         deploy(a.out, champion)
     a.init = champion
+    falls = {}  # self_destructs() of the matches measured, by path
     while True:
         try:
             level = current_level()
@@ -222,7 +262,11 @@ def loop(a):
             # alone in the morning were lucky by 1.7 stocks, and no candidate could beat them.
             theirs = [m for m in res if m.version == best][-2 * a.trial:]
             mine = [m for m in res if m.version == current][-a.trial:]
-            score = lambda ms: sum(m.score for m in ms) / len(ms)
+            for m in mine + theirs:
+                if m.path not in falls:
+                    falls[m.path] = self_destructs(m.path, m.me)
+            score = lambda ms: sum(m.score - SELF_DESTRUCT * falls[m.path] for m in ms) / len(ms)
+            fell = lambda ms: sum(falls[m.path] for m in ms) / len(ms)
             if len(theirs) >= a.trial and sum(m.won for m in theirs[-a.trial:]) >= a.wins:
                 if level < 9:
                     with open(level_file, "w") as f:
@@ -236,12 +280,14 @@ def loop(a):
             if current == best:
                 train_apart(a)
             elif len(mine) == a.trial and len(theirs) >= a.trial:
+                measure = (f"{current} scores {score(mine):.2f} against {score(theirs):.2f}, falls on its own "
+                           f"{fell(mine):.2f} a match against {fell(theirs):.2f}, at level {level}")
                 if score(mine) >= score(theirs):
                     deploy(a.out, champion)
                     shutil.copy(champion, champion.replace(".pt", f"-{current}.pt"))
-                    log(f"{current} scores {score(mine):.2f} against {score(theirs):.2f} at level {level}: champion")
+                    log(f"{measure}: champion")
                     continue
-                log(f"{current} scores {score(mine):.2f} against {score(theirs):.2f} at level {level}: dropped")
+                log(f"{measure}: dropped")
                 train_apart(a)
             time.sleep(60)
         except MemoryError:  # other work on the PC took it all: wait for it to finish

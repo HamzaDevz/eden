@@ -14,15 +14,15 @@ to a player on the character select and its controller is the model's for the ma
 Offline only, never against people online: it stops when the other player is not a CPU,
 unless --sparring (local humans) or --selfplay (the model plays every human slot). With
 --players 4 (up to 8) it also plays matches of three or more, kept in ~/smash-ai/party.
-With --pad P (mode IA), a FIG card on the character select is an AI's: a FIG card waiting for
-its figurine gets the virtual amiibo of an AI not seated yet (AMIIBO/<name>.bin on the console,
-made by amiibo.py and registered once in Smash's amiibo menu), or the player loads one from
-Eden's menu. The AIs are --figs (--name by default), each on its own controller (P, then P-1...)
-with its own model (<name>.pt next to --agent, else --agent). When someone presses + there, the
-FIG cards of AIs become player cards on their controllers, so Smash's amiibo AI never plays
-(its level and learning count for nothing): the model does. The card then stays a player card on
-that controller for the next matches, until it is disconnected on the card; its hand picks Mario
-again when the card lost its fighter.
+With --pad P (mode IA), a FIG card on the character select is an AI's: as soon as a FIG card
+waits for its figurine, Eden lists the AIs' virtual amiibo (AMIIBO/<name>.bin on the console,
+made by amiibo.py and registered once in Smash's amiibo menu) for the player to pick one. The AIs
+are --figs (--name by default), each on its own controller (P, then P-1...) with its own model
+(<name>.pt or .npz next to --agent, else --agent). When someone presses + there, the FIG cards of
+AIs become player cards on their controllers, so Smash's amiibo AI never plays (its level and
+learning count for nothing): the model does, and presses A on the results. Back on the select,
+the card waits for its figurine again and gets the same AI's amiibo from here; an AI's player
+card that lost its fighter has its hand pick Mario again.
 Matches with the model go to ~/smash-ai/play, the others to ~/smash-ai/rec. It also stops
 once smash_rl.py writes "selfplay" in ~/smash-ai/phase, for the CPU slot to become a player.
 
@@ -75,7 +75,8 @@ PICK = pick_path(13)
 RETRY = [(0x2, 0, 0)] * PRESS_FRAMES + [(0, 0, 0)] * 10
 SETTLE = [(0, 0, 0)] * 20  # before the card table shows the pick
 PICK_DOWNS = (7, 13, 4, 10)
-LOOK_EVERY = 180
+LOOK_EVERY = 60
+PLACED_FOR = 180  # frames an amiibo put back stays on the reader, for Smash to scan it
 AMIIBO = "/storage/emulated/0/Android/data/com.miHoYo.Yuanshen.relWithDebInfo/files/amiibo"
 KINDS_FOR = 600  # frames the FIG cards stay player cards after a + that started no match
 
@@ -137,7 +138,8 @@ def main():
     pad_figs = {p: name for name, p in fig_pads.items()}
 
     def agent(i, name):
-        own = os.path.join(os.path.dirname(os.path.expanduser(a.agent)), name.lower() + ".pt")
+        own = os.path.join(os.path.dirname(os.path.expanduser(a.agent)),
+                           name.lower() + os.path.splitext(a.agent)[1])
         path = own if os.path.exists(own) else os.path.expanduser(a.agent)
         if i not in agents or agents[i].path != path:
             agents[i] = Agent(path, i)
@@ -172,8 +174,10 @@ def main():
     pads = {}  # the controller playing each slot the agent plays
     join_steps, next_look, seen = [], 0, None  # with --pad: a pick in progress, the next look
     picking, tries, tried = None, 0, None  # (card, controller) it picks on, cards it gave up on
-    fig_cards, waited, placed = {}, set(), None  # AIs' FIG cards, cards waiting, the amiibo out
+    fig_cards, last_ai = {}, {}  # AIs' FIG cards, the AI each card had
+    placed, placed_until = None, 0  # an amiibo put back on the reader
     kinds_until, converted = 0, []  # the FIG cards made player cards on a + press
+    next_ok, ok_until = 0, 0  # the AIs' A on the results
     try:
         for line in b.frames(raw=True):
             f = Frame(line)
@@ -279,6 +283,18 @@ def main():
                     if i in fighters:
                         b.pad(pads[i], *ag.act(fighters))
 
+            # The results wait for an A from every player, the AIs' too (their player cards still
+            # hold their controllers there).
+            if fig_pads and result and count >= 2 and f.index >= next_ok:
+                for _, p in smash_state.card_owners(f).values():
+                    if p in pad_figs:
+                        b.pad(p, BUTTON_A)
+                ok_until, next_ok = f.index + PRESS_FRAMES, f.index + PRESS_EVERY
+            elif ok_until and f.index >= ok_until:
+                for p in pad_figs:
+                    b.release(p)
+                ok_until = 0
+
             if fig_pads and not fighting:
                 if join_steps:
                     card, pad = picking
@@ -313,7 +329,7 @@ def main():
                                    f"main+{smash_state.CARD_PADS + i * smash_state.CARD_PAD_SIZE:#x}")
                             b.poke(f"kind{i}", bytes(4), f"main+{smash_state.CARDS + i * smash_state.CARD_SIZE + smash_state.CARD_KIND:#x}")
                             b.poke(f"kindcopy{i}", bytes(4), f"main+{smash_state.CARD_PADS + i * smash_state.CARD_PAD_SIZE + smash_state.CARD_COPY + smash_state.CARD_KIND:#x}")
-                            converted[i] = fig_cards[i] = nick
+                            converted[i] = fig_cards[i] = last_ai[i] = nick
                     if converted:
                         kinds_until = f.index + KINDS_FOR
                         log("+: " + ", ".join(f"card {i + 1} is {n}'s" for i, n in converted.items()))
@@ -341,16 +357,18 @@ def main():
                                    f"main+{smash_state.CARD_PADS + i * smash_state.CARD_PAD_SIZE:#x}")
                             b.unpoke(f"pad{i}")
                     fig_cards = ai_figs
-                    # A FIG card still waiting since the last look gets an AI not seated yet: its
-                    # virtual amiibo on the reader for one look, while Smash scans for it.
-                    free = [n for n in fig_pads if n not in seated]
-                    if placed:
+                    # A card that had an AI waits for its figurine again after the match: the same
+                    # one goes back on the reader, for Smash to write the match to it.
+                    for i in set(last_ai) - waiting - set(seated.values()) - set(ai_figs):
+                        del last_ai[i]  # the card is someone else's now
+                    back = [(i, last_ai[i]) for i in sorted(waiting & set(last_ai))
+                            if last_ai[i] not in seated]
+                    if placed and f.index >= placed_until:
                         b.amiibo()
                         placed = None
-                    elif waiting & waited and free and b.amiibo(f"{AMIIBO}/{free[0]}.bin"):
-                        placed = free[0]
-                        log(f"{placed}'s amiibo on the reader for card {min(waiting & waited) + 1}")
-                    waited = waiting
+                    elif back and not placed and b.amiibo(f"{AMIIBO}/{back[0][1]}.bin"):
+                        placed, placed_until = back[0][1], f.index + PLACED_FOR
+                        log(f"{placed}'s amiibo back on the reader for card {back[0][0] + 1}")
                     # An AI's player card without its fighter: its hand picks Mario.
                     lost = [(i, p) for i, (kind, chara) in now.items()
                             for p in [owners.get(i, ("", -1))[1]]

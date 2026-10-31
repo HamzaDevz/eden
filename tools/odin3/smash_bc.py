@@ -7,15 +7,21 @@ and the attack, special, jump and guard buttons. The delay covers the bridge rou
 so the model plays later with the information it really has. Matches are mirrored at
 random (x, facing and stick x flipped) to double the data.
 
+Agent also plays without torch (on the console, in Termux) from a numpy copy of the model.
+
   smash_bc.py train [--rec ~/smash-ai/rec] [--steps 20000] [--out ~/smash-ai/models/bc.pt]
+  smash_bc.py npz --model ~/smash-ai/models/ultimus.pt --out ~/smash-ai/models/ultimus.npz
 """
 import argparse
 import os
 import time
 
 import numpy as np
-import torch
-from torch import nn
+try:
+    import torch
+    from torch import nn
+except ImportError:  # the console plays the numpy copy of the model
+    torch = nn = None
 
 import smash_dataset
 import smash_state
@@ -96,7 +102,7 @@ def perspective(d, me, sign):
     return cont, cat, stick, buttons
 
 
-class Policy(nn.Module):
+class Policy(nn.Module if nn else object):
     def __init__(self, hidden=256):
         super().__init__()
         self.kind = nn.Embedding(KINDS, 16)
@@ -121,6 +127,40 @@ class Policy(nn.Module):
         # the moves and every model trained on top of imitation played worse.
         return self.stick(z).unflatten(-1, (2, BINS)), self.buttons(z), self.value(z.detach())[..., 0], h
 
+    def step(self, cont, cat, prev_stick, prev_buttons, h):
+        """One frame: stick logits (2, BINS) and button logits as numpy, and the GRU state."""
+        t = lambda a, dt: torch.tensor(np.asarray(a)[None, None], dtype=dt)
+        with torch.no_grad():
+            logits, blogits, _, h = self(t(cont, torch.float32), t(cat, torch.long),
+                                         t(prev_stick, torch.long), t(prev_buttons, torch.float32), h)
+        return logits[0, 0].numpy(), blogits[0, 0].numpy(), h
+
+
+class NumpyPolicy:
+    """Policy.step in numpy, from the arrays npz() wrote."""
+
+    def __init__(self, path):
+        self.w = dict(np.load(path))
+        self.version = str(self.w.pop("version")) if "version" in self.w else None
+
+    def step(self, cont, cat, prev_stick, prev_buttons, h):
+        w, sigmoid = self.w, lambda v: 1 / (1 + np.exp(-v))
+        x = np.concatenate([cont, w["kind.weight"][cat[0]], w["status.weight"][cat[1]],
+                            w["motion.weight"][cat[2]], w["kind.weight"][cat[3]],
+                            w["status.weight"][cat[4]], w["motion.weight"][cat[5]],
+                            w["prev_stick.weight"][prev_stick[0]],
+                            w["prev_stick.weight"][prev_stick[1]], np.float32(prev_buttons)])
+        x = np.maximum(w["inp.0.weight"] @ x + w["inp.0.bias"], 0)
+        x = np.maximum(w["inp.3.weight"] @ x + w["inp.3.bias"], 0)
+        h = np.zeros(len(x), np.float32) if h is None else h
+        # torch.nn.GRU: reset, update and new gates, in that order.
+        gi = np.split(w["gru.weight_ih_l0"] @ x + w["gru.bias_ih_l0"], 3)
+        gh = np.split(w["gru.weight_hh_l0"] @ h + w["gru.bias_hh_l0"], 3)
+        r, z = sigmoid(gi[0] + gh[0]), sigmoid(gi[1] + gh[1])
+        h = (1 - z) * np.tanh(gi[2] + r * gh[2]) + z * h
+        return ((w["stick.weight"] @ h + w["stick.bias"]).reshape(2, BINS),
+                w["buttons.weight"] @ h + w["buttons.bias"], h)
+
 
 class Agent:
     """Plays fighter `me` with a trained Policy, one step per bridge frame."""
@@ -133,7 +173,8 @@ class Agent:
         self.me, self.rng = me, np.random.default_rng()
         # One small step per frame: more threads only spun, 12 ms a frame instead of 1.5 on the
         # PC, and in lockstep the game waited for them.
-        torch.set_num_threads(1)
+        if torch:
+            torch.set_num_threads(1)
         self.reload()
         self.reset()
 
@@ -143,7 +184,6 @@ class Agent:
         if mtime == self.mtime:
             return False
         self.model = load(self.path)
-        self.model.eval()
         self.mtime = mtime
         return True
 
@@ -287,7 +327,6 @@ class Agent:
     def pad(self, mask, lx, ly):
         return mask, int(lx * 32767), int(ly * 32767)
 
-    @torch.no_grad()
     def act(self, fighters):
         """Pad for the next frame: (bridge button mask, lx, ly) as npad values.
 
@@ -302,13 +341,10 @@ class Agent:
              for k in self.STATE + ("motion",)}
         d["stage"] = np.full(2, me.stage)
         cont, cat, _, _ = perspective(d, 0, 1)
-        t = lambda a, dt: torch.tensor(np.asarray(a)[None, None], dtype=dt)
-        logits, blogits, _, self.h = self.model(
-            t(cont[-1], torch.float32), t(cat[-1], torch.long), t(self.stick, torch.long),
-            t(self.buttons, torch.float32), self.h)
-        probs = torch.softmax(logits[0, 0] / TEMPERATURE, -1).numpy()
+        logits, blogits, self.h = self.model.step(cont[-1], cat[-1], self.stick, self.buttons, self.h)
+        probs = np.exp((logits - logits.max(-1, keepdims=True)) / TEMPERATURE)
         self.stick = [int(self.rng.choice(BINS, p=p / p.sum())) for p in probs]
-        bprobs = torch.sigmoid(blogits[0, 0]).numpy()
+        bprobs = 1 / (1 + np.exp(-blogits))
         self.buttons = [float(self.rng.random() < p) for p in bprobs]
         o = fighters[other]
         if abs(me.x) < EDGE + 5 and me.y > -5 and (abs(o.x - me.x) > REACH or abs(o.y - me.y) > REACH):
@@ -333,6 +369,8 @@ class Agent:
 def load(path):
     """Policy from a checkpoint; imitation ones have no value head yet, older ones no sight: its
     inputs start unused, so the model plays as before until training weighs them."""
+    if path.endswith(".npz"):
+        return NumpyPolicy(path)
     checkpoint = torch.load(path, map_location="cpu")
     model, state = Policy(), checkpoint["state"]
     w = state["inp.0.weight"]
@@ -340,7 +378,7 @@ def load(path):
         state["inp.0.weight"] = torch.cat([w[:, :CONT], w.new_zeros(len(w), SIGHT), w[:, CONT:]], 1)
     model.load_state_dict(state, strict=False)
     model.version = checkpoint.get("version")  # set by smash_rl.py, which compares versions
-    return model
+    return model.eval()
 
 
 def sequences(paths, extra=None, sides=None):
@@ -425,9 +463,21 @@ def train(a):
     print(f"saved {a.out} (val {best:.3f})")
 
 
+def npz(a):
+    """The model's arrays for NumpyPolicy, written next to it first then renamed."""
+    model = load(os.path.expanduser(a.model))
+    arrays = {k: v.numpy() for k, v in model.state_dict().items()}
+    if model.version is not None:
+        arrays["version"] = np.array(str(model.version))
+    with open(a.out + ".part", "wb") as f:
+        np.savez(f, **arrays)
+    os.replace(a.out + ".part", a.out)
+
+
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("op", choices=["train"])
+    ap.add_argument("op", choices=["train", "npz"])
+    ap.add_argument("--model", default="~/smash-ai/models/ultimus.pt")
     ap.add_argument("--rec", default="~/smash-ai/rec")
     ap.add_argument("--out", default=os.path.expanduser("~/smash-ai/models/bc.pt"))
     ap.add_argument("--steps", type=int, default=20000)
@@ -436,7 +486,8 @@ def main():
     ap.add_argument("--lr", type=float, default=1e-3)
     ap.add_argument("--every", type=int, default=500)
     a = ap.parse_args()
-    train(a)
+    a.out = os.path.expanduser(a.out)
+    train(a) if a.op == "train" else npz(a)
 
 
 if __name__ == "__main__":

@@ -17,6 +17,8 @@ is restarted too when its recorder saved nothing for --idle seconds, or when the
 With --figs the AIs play as on the Odin: their controllers (8, then 7...) go back in on the title
 screen, the first one goes to the character select, where smash_record.py makes its player card
 its FIG card, puts its amiibo (ROOT\\k\\amiibo) and plays it with --pad 7, in the same conditions.
+Each AI has its own brain: the instances play the one smash_rl.py names in HOME\\ai, its champion
+and candidate (see models()), and restart when it names the next.
 
   smash_farm.py --instances 0 1 [--cpu 0] [--champion 0] [--figs Ultimus,...] [--every 5400]
                 [--idle 900]
@@ -62,6 +64,15 @@ for ring in range(1, 9):  # right 1, down 1, left 2, up 2, right 3...
 # With --figs, as on the Odin: the first AI's controller goes to the character select, where its
 # player card is the first, which the recorder turns into its FIG card and puts its amiibo on.
 FIG_PAD = 7
+
+
+def models(home, name):
+    """An AI's candidate in training and the champion it has to beat (Ultimus' keep the names they
+    had when it trained alone); pcsync.sh sends each champion to the Odin as <name>.pt."""
+    d = os.path.join(home, "models")
+    if name == "Ultimus":
+        return os.path.join(d, "ultimus.pt"), os.path.join(d, "champion.pt")
+    return os.path.join(d, f"{name.lower()}.pt"), os.path.join(d, f"{name.lower()}-champion.pt")
 PADS = {"a": (0x1, 0, 0), "b": (0x2, 0, 0), "dd": (0x8000, 0, 0), "sl": (0, -32767, 0), "sr": (0, 32767, 0), "su": (0, 0, 32767),
         "sd": (0, 0, -32767)}
 
@@ -186,6 +197,7 @@ class Instance:
         self.log = os.path.join(a.home, f"rec{k}.log")
         self.cpu, self.level, self.started = k in a.cpu, 9, 0
         self.pad = FIG_PAD if a.figs and not self.cpu else 0  # the controller that goes to the select
+        self.ai = None  # with --figs, the AI it plays
         self.refs = load_refs()
         digits = np.load(LEVELS)
         self.digits = {int(n[5:]): digits[n].astype(np.float32) for n in digits.files}
@@ -302,12 +314,18 @@ class Instance:
         finally:
             b.sock.close()
 
+    def wanted_ai(self):
+        """The AI smash_rl.py trains now (HOME\\ai), the first of --figs before it named one."""
+        path = os.path.join(self.a.home, "ai")
+        return open(path).read().strip() if os.path.exists(path) else self.a.figs.split(",")[0]
+
     def wanted_level(self):
         path = os.path.join(self.a.home, "level")
         return 9 if self.cpu else int(open(path).read()) if os.path.exists(path) else 1
 
     def start(self):
         self.level = self.wanted_level()
+        self.ai = self.wanted_ai() if self.a.figs and not self.cpu else None
         for attempt in range(3):
             log(f"instance {self.k}: restart")
             if self.launch():
@@ -315,12 +333,13 @@ class Instance:
         else:
             log(f"instance {self.k}: character select not reached")
             return
+        candidate, champion = models(self.a.home, self.ai or "Ultimus")
         mode = (["--out", os.path.join(self.a.home, "rec")] if self.cpu else
-                ["--agent", os.path.join(self.a.home, "models",
-                                         "champion.pt" if self.k in self.a.champion else "ultimus.pt"),
+                ["--agent", champion if self.k in self.a.champion else candidate,
                  "--out", os.path.join(self.a.home, "play")])
-        if self.a.figs and not self.cpu:  # the Odin's way: its pads 5 to 8 connected at boot
-            mode += ["--players", "8", "--pad", str(FIG_PAD), "--figs", self.a.figs,
+        if self.ai:  # the Odin's way: its pads 5 to 8 connected at boot, the AI trained on the 8th
+            figs = [self.ai] + [n for n in self.a.figs.split(",") if n != self.ai]
+            mode += ["--players", "8", "--pad", str(FIG_PAD), "--figs", ",".join(figs),
                      "--amiibo", os.path.join(self.dir, "amiibo")]
         with open(self.log, "a") as out:
             subprocess.Popen([sys.executable, "-u", "smash_record.py", "--port", str(self.port),
@@ -351,7 +370,7 @@ def main():
         time.sleep(30)
         now = time.time()
         for i in instances:
-            if (now - i.started > a.every or i.wanted_level() != i.level
+            if (now - i.started > a.every or i.wanted_level() != i.level or i.ai and i.wanted_ai() != i.ai
                     or now - i.started > a.idle and now - i.last_save() > a.idle):
                 i.start()
 

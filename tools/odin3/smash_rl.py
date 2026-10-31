@@ -14,8 +14,11 @@ than the value head expected, weighted by exp(advantage / beta).
                       at least as much as the champion over its last 2 * --trial matches,
                       which smash_farm.py has it play at the same time. The CPU level, in
                       ~/smash-ai/level, goes from 1 up to 9 each time the champion wins --wins
-                      of its last --trial matches; at 9 that writes "selfplay" to ~/smash-ai/phase
-  smash_rl.py stats   Ultimus' results, most recent last
+                      of its last --trial matches; at 9 that writes "selfplay" to ~/smash-ai/phase.
+                      Each of the --ais has its own brain (smash_farm.models()), trained on its
+                      own matches; they take turns, one candidate each, the one whose turn it
+                      is named in ~/smash-ai/ai for smash_farm.py
+  smash_rl.py stats   the AIs' results, most recent last
 """
 import argparse
 import collections
@@ -33,6 +36,7 @@ from torch import nn
 
 import smash_bc
 import smash_dataset
+import smash_farm
 
 HOME = os.path.expanduser("~/smash-ai")
 GAMMA = 0.997  # per frame, a half life of about 4 s
@@ -126,11 +130,18 @@ def focused_batch(seqs, hot, size, length, rng, device):
     return [torch.cat(p) for p in zip(parts, more)]
 
 
-Match = collections.namedtuple("Match", "path won score level version me lockstep")
+Match = collections.namedtuple("Match", "path won score level version me measured name")
+
+
+def player(header):
+    """Whether the PC measured the match (in lockstep against a CPU of the level it set: the Odin's
+    have none and may be against Hamza), and the AI that played it (Ultimus before the FIG cards)."""
+    return (header.get("sync", 1) > 0 and header.get("level") is not None,
+            (header.get("figs") or {}).get(str(header.get("me")), "Ultimus"))
 
 
 def result(path):
-    """Match fields after the path, None when Ultimus did not play it alone."""
+    """Match fields after the path, None when no AI played it alone."""
     with gzip.open(path, "rt") as f:
         header = json.loads(f.readline()[2:])
     me = header.get("me")
@@ -144,11 +155,11 @@ def result(path):
     mine, theirs = (stock[me], -damage[me]), (stock[1 - me], -damage[1 - me])
     score = reward({k: d[k][rows] for k in ("damage", "stock")}, me).sum()
     return (bool(mine > theirs), float(score), header.get("level") or 9, header.get("version"), int(me),
-            header.get("sync", 1) > 0)
+            *player(header))
 
 
 def results(folder):
-    """Each match Ultimus played alone against the CPU, oldest first: result, total reward,
+    """Each match an AI played alone against the CPU, oldest first: result, total reward,
     CPU level (9 when the recorder was not told), model version, and whether the game waited
     for the agent (the PC) or not (the Odin, its pads a little late)."""
     # Decoding all 16 000 matches took the loop 50 min between two models: a saved match no
@@ -166,6 +177,10 @@ def results(folder):
     for path in smash_dataset.recordings(folder):
         name = os.path.basename(path)
         r = known[name] if name in known else result(path)
+        if r and len(r) < len(Match._fields) - 1:  # kept before the AI's name: its header has it
+            with gzip.open(path, "rt") as f:
+                r = known[name] = [*r[:5], *player(json.loads(f.readline()[2:]))]
+            fresh = True
         if name not in known and time.time() - os.path.getmtime(path) > 60:
             known[name], fresh = r, True
         if r:
@@ -185,9 +200,9 @@ def current_level():
 
 def train(a):
     rec = [p for p in smash_dataset.recordings(a.rec) if smash_bc.sequences([p])]
-    # Ultimus' recent matches at the current level only: hundreds of old falls at level 9
+    # The AI's recent matches at the current level only: hundreds of old falls at level 9
     # would mostly teach it to fall again.
-    play = [m for m in results(a.play) if m.level == current_level()][-a.recent:]
+    play = [m for m in results(a.play) if m.level == current_level() and m.name == a.ai][-a.recent:]
     # Ultimus' side only: the weak CPU's moves are no example.
     rec_seqs = smash_bc.sequences(rec, returns)
     play_seqs = smash_bc.sequences([m.path for m in play], returns, {m.path: m.me for m in play})
@@ -196,7 +211,7 @@ def train(a):
     device = ("cuda" if torch.cuda.is_available()
               else "mps" if torch.backends.mps.is_available() else "cpu")
     init = a.init if os.path.exists(a.init) else os.path.join(HOME, "models/bc.pt")
-    log(f"{len(rec)} CPU matches, {len(play)} Ultimus matches, from {init}, device {device}")
+    log(f"{len(rec)} CPU matches, {len(play)} {a.ai} matches, from {init}, device {device}")
     model = smash_bc.load(init).to(device)
     opt = torch.optim.AdamW(model.parameters(), lr=a.lr, weight_decay=1e-4)
     rng = np.random.default_rng()
@@ -259,17 +274,35 @@ def deploy(src, dst):
 
 
 def loop(a):
-    champion, phase = os.path.join(os.path.dirname(a.out), "champion.pt"), os.path.join(HOME, "phase")
-    level_file = os.path.join(HOME, "level")  # also read by smash_farm.py
-    if not os.path.exists(champion):
-        deploy(a.out, champion)
-    a.init = champion
+    phase = os.path.join(HOME, "phase")
+    level_file, ai_file = os.path.join(HOME, "level"), os.path.join(HOME, "ai")  # also read by smash_farm.py
+    ais = a.ais.split(",")
+    named = open(ai_file).read().strip() if os.path.exists(ai_file) else None
+    turn = ais.index(named) if named in ais else 0  # a restarted loop goes on with the same AI
     falls = {}  # self_destructs() of the matches measured, by path
+
+    def name_next(ai):
+        """Tells smash_farm.py which AI to play, once its models exist: its instances restart on it."""
+        candidate, champion = smash_farm.models(HOME, ai)
+        if not os.path.exists(champion):  # a new AI starts from Ultimus' brain
+            deploy(smash_farm.models(HOME, ais[0])[1], champion)
+        if not os.path.exists(candidate):
+            deploy(champion, candidate)
+        if not os.path.exists(ai_file) or open(ai_file).read().strip() != ai:
+            with open(ai_file, "w") as f:
+                f.write(ai + "\n")
+            log(f"{ai}'s turn")
+
     while True:
         try:
+            # Each AI has its brain, trained on its own matches: one turn each, a candidate measured.
+            a.ai = ais[turn % len(ais)]
+            name_next(a.ai)
+            a.out, champion = smash_farm.models(HOME, a.ai)
+            a.init = champion
             level = current_level()
             # Models are measured on the PC only: the Odin's matches train them but play by other rules.
-            res = [m for m in results(a.play) if m.level == level and m.lockstep]
+            res = [m for m in results(a.play) if m.level == level and m.measured and m.name == a.ai]
             best, current = version(champion), version(a.out)
             # The champion's last matches, played next to the candidate's: ten matches measured
             # alone in the morning were lucky by 1.7 stocks, and no candidate could beat them.
@@ -298,10 +331,14 @@ def loop(a):
                 if score(mine) >= score(theirs):
                     deploy(a.out, champion)
                     shutil.copy(champion, champion.replace(".pt", f"-{current}.pt"))
-                    log(f"{measure}: champion")
-                    continue
-                log(f"{measure}: dropped")
+                    log(f"{a.ai} {measure}: champion")
+                else:
+                    log(f"{a.ai} {measure}: dropped")
+                # The next AI plays while this one's next candidate trains.
+                turn += 1
+                name_next(ais[turn % len(ais)])
                 train_apart(a)
+                continue
             time.sleep(60)
         except MemoryError:  # other work on the PC took it all: wait for it to finish
             log("out of memory, next turn in 5 min")
@@ -311,7 +348,7 @@ def loop(a):
 def stats(a):
     res = results(a.play)
     for m in res:
-        print(os.path.basename(m.path), "won" if m.won else "lost", f"{m.score:.2f} level {m.level} {m.version}")
+        print(os.path.basename(m.path), m.name, "won" if m.won else "lost", f"{m.score:.2f} level {m.level} {m.version}")
     print(sum(m.won for m in res), "wins out of", len(res))
 
 
@@ -329,7 +366,9 @@ def main():
     ap.add_argument("--beta", type=float, default=1.0, help="advantage temperature, in std units")
     ap.add_argument("--vcoef", type=float, default=1.0)
     ap.add_argument("--every", type=int, default=500)
-    ap.add_argument("--recent", type=int, default=300, help="Ultimus matches trained on")
+    ap.add_argument("--recent", type=int, default=300, help="the AI's matches trained on")
+    ap.add_argument("--ai", default="Ultimus", help="the AI trained, by its matches")
+    ap.add_argument("--ais", default="Ultimus,Optimus,Nostradamus,Magnus", help="the AIs the loop trains in turn")
     ap.add_argument("--trial", type=int, default=10, help="matches that measure a model")
     ap.add_argument("--wins", type=int, default=6, help="champion wins in --trial that raise the level")
     a = ap.parse_args()

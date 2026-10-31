@@ -15,6 +15,8 @@
 //                                     buttons the low 16 npad bits (A to D-pad down, the same in
 //                                     TAS), sticks -32767..32767
 //   release <player>
+//   amiibo <path|->                   puts the amiibo file on the virtual NFC reader of player 1
+//                                     while the game scans, or takes it off -> ok amiibo
 //   sync <k>                          lockstep, 0 to stop: each frame waits (1 s at most) until
 //                                     the client acked a frame at most k older
 //   tick <frame>                      acks a frame line, no reply
@@ -126,8 +128,10 @@ struct GameBridge::Impl {
         return out;
     }
 
-    Impl(Core::System& system_, u16 port, GameBridgePadSink pad_sink_)
-        : system{system_}, pad_sink{std::move(pad_sink_)}, acceptor{io_context} {
+    Impl(Core::System& system_, u16 port, GameBridgePadSink pad_sink_,
+         GameBridgeAmiiboSink amiibo_sink_)
+        : system{system_}, pad_sink{std::move(pad_sink_)}, amiibo_sink{std::move(amiibo_sink_)},
+          acceptor{io_context} {
         try {
             const tcp::endpoint endpoint{boost::asio::ip::address_v4::any(), port};
             acceptor.open(endpoint.protocol());
@@ -320,6 +324,9 @@ private:
             if (player < NumPads) {
                 pads_set &= ~(1U << player);
             }
+        } else if (command == "amiibo" && args.size() == 2) {
+            const bool done = amiibo_sink && amiibo_sink(args[1] == "-" ? "" : args[1]);
+            Send(done ? "ok amiibo\n" : "err amiibo\n");
         } else if (command == "watch" && args.size() >= 4) {
             Watch watch{.id = args[1], .length = ParseU64(args[2])};
             if (watch.length == 0 || watch.length > MaxWatch) {
@@ -575,6 +582,7 @@ private:
 
     Core::System& system;
     GameBridgePadSink pad_sink;
+    GameBridgeAmiiboSink amiibo_sink;
 
     boost::asio::io_context io_context;
     tcp::acceptor acceptor;
@@ -606,8 +614,9 @@ private:
     Core::Symbols::Symbols symbols;
 };
 
-GameBridge::GameBridge(Core::System& system, u16 port, GameBridgePadSink pad_sink)
-    : impl{std::make_unique<Impl>(system, port, std::move(pad_sink))} {}
+GameBridge::GameBridge(Core::System& system, u16 port, GameBridgePadSink pad_sink,
+                       GameBridgeAmiiboSink amiibo_sink)
+    : impl{std::make_unique<Impl>(system, port, std::move(pad_sink), std::move(amiibo_sink))} {}
 
 GameBridge::~GameBridge() = default;
 

@@ -363,7 +363,8 @@ struct System::Impl {
         // Before the services exist, so the display never sees it change.
         if (Settings::values.use_game_bridge) {
             game_bridge = std::make_unique<Tools::GameBridge>(
-                system, Settings::values.game_bridge_port.GetValue(), game_bridge_pad_sink);
+                system, Settings::values.game_bridge_port.GetValue(), game_bridge_pad_sink,
+                game_bridge_amiibo_sink);
         }
 
         // Set up the rest of the system.
@@ -517,6 +518,7 @@ struct System::Impl {
     std::optional<Tools::RenderdocAPI> renderdoc_api;
     std::unique_ptr<Tools::GameBridge> game_bridge;
     Tools::GameBridgePadSink game_bridge_pad_sink;
+    Tools::GameBridgeAmiiboSink game_bridge_amiibo_sink;
     std::optional<Tegra::GPU> gpu_core;
 
     std::array<Core::GPUDirtyMemoryManager, Core::Hardware::NUM_CPU_CORES> gpu_dirty_memory_managers;
@@ -964,6 +966,10 @@ Tools::RenderdocAPI& System::GetRenderdocAPI() {
 void System::SetGameBridgePadSink(
     std::function<void(std::size_t, u64, float, float, float, float)> pad_sink) {
     impl->game_bridge_pad_sink = std::move(pad_sink);
+}
+
+void System::SetGameBridgeAmiiboSink(std::function<bool(const std::string&)> amiibo_sink) {
+    impl->game_bridge_amiibo_sink = std::move(amiibo_sink);
 }
 
 Tools::GameBridge* System::GetGameBridge() {

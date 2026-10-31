@@ -387,6 +387,9 @@ public:
     void SetGameBridgePadSink(
         std::function<void(std::size_t, u64, float, float, float, float)> pad_sink);
 
+    /// How the game bridge puts an amiibo file on the virtual NFC reader (empty path: off).
+    void SetGameBridgeAmiiboSink(std::function<bool(const std::string&)> amiibo_sink);
+
     /// The game bridge of the running application, or nullptr when use_game_bridge is off.
     [[nodiscard]] Tools::GameBridge* GetGameBridge();
 

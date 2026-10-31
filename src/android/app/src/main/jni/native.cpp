@@ -336,6 +336,11 @@ Core::SystemResultStatus EmulationSession::InitializeEmulation(const std::string
                                          float rx, float ry) {
         m_input_subsystem.GetTas()->SetLiveInput(player, buttons, {lx, ly}, {rx, ry});
     });
+    m_system.SetGameBridgeAmiiboSink([this](const std::string& path) {
+        auto* amiibo = m_input_subsystem.GetVirtualAmiibo();
+        return path.empty() ? amiibo->CloseAmiibo() == InputCommon::VirtualAmiibo::Info::Success
+                            : amiibo->LoadAmiibo(path) == InputCommon::VirtualAmiibo::Info::Success;
+    });
     m_load_result = m_system.Load(EmulationSession::GetInstance().Window(), filepath, params);
     if (m_load_result != Core::SystemResultStatus::Success) {
         return m_load_result;

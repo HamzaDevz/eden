@@ -5,6 +5,7 @@
 
 #include <functional>
 #include <memory>
+#include <string>
 
 #include "common/common_types.h"
 
@@ -18,6 +19,10 @@ namespace Tools {
 using GameBridgePadSink =
     std::function<void(std::size_t player, u64 buttons, float lx, float ly, float rx, float ry)>;
 
+/// Puts the amiibo file at path on the virtual NFC reader, or takes it off when path is empty;
+/// false when the game is not scanning. Set by the frontend.
+using GameBridgeAmiiboSink = std::function<bool(const std::string& path)>;
+
 /**
  * Line-based TCP server that lets an external agent watch and play the running game: once per
  * composited frame it streams every connected controller and a list of watched guest memory
@@ -25,7 +30,8 @@ using GameBridgePadSink =
  */
 class GameBridge {
 public:
-    explicit GameBridge(Core::System& system, u16 port, GameBridgePadSink pad_sink);
+    explicit GameBridge(Core::System& system, u16 port, GameBridgePadSink pad_sink,
+                        GameBridgeAmiiboSink amiibo_sink);
     ~GameBridge();
 
     /// Called by the display once per composited frame.

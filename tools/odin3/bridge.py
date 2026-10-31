@@ -82,6 +82,10 @@ class Bridge:
     def unpoke(self, pid="*"):
         return self.ask(f"unpoke {pid}", "ok")
 
+    def amiibo(self, path=None):
+        """Puts the amiibo file at path (on the console) on the NFC reader, or takes it off."""
+        return self.ask(f"amiibo {path or '-'}", "ok").startswith("ok")
+
     def pad(self, player, buttons=0, lx=0, ly=0, rx=0, ry=0):
         self.send(f"pad {player} {buttons:#x} {lx} {ly} {rx} {ry}")
 

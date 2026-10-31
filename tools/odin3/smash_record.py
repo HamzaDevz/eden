@@ -18,7 +18,8 @@ With --pad P (mode IA), a CPU given Mario on the character select is the model's
 controller P, its own (player 8 is connected without a pad in Smash's game config): L+R there
 takes a CPU's card (Smash gives one to a joining controller), its hand picks Mario, checked in
 Smash's card table, and at the start of each match it finds its fighter by swinging its stick
-until one fighter's stick follows. A tagged player still goes first.
+until one fighter's stick follows. It goes before a player tagged with its name, as the Odin's
+own controller keeps the tag of its training when someone plays on it next.
 Matches with the model go to ~/smash-ai/play, the others to ~/smash-ai/rec. It also stops
 once smash_rl.py writes "selfplay" in ~/smash-ai/phase, for the CPU slot to become a player.
 
@@ -184,7 +185,7 @@ def main():
             if out is None and fighters and len(fighters) == min(count, a.players):
                 tags = smash_state.names(f, a.players)
                 me = next((i for i, t in tags.items() if t == a.name and i in fighters), None) \
-                    if a.agent else None
+                    if a.agent and card is None else None
                 if a.agent and a.pad is None and me is None:  # a match to learn nothing from
                     log(f"no player named {a.name}, stopping")
                     return
@@ -313,10 +314,8 @@ def main():
                         card = None  # its card was closed or given back to a CPU
                     cpu_mario = [i for i, c in now.items()
                                  if c == (smash_state.CPU, smash_state.MARIO)]
-                    # A tagged player plays through its own controller; a failed try waits for the
-                    # cards to change.
-                    tagged = a.name in smash_state.names(f, a.players).values()
-                    if cpu_mario and card is None and now != tried and not tagged:
+                    # A failed try waits for the cards to change.
+                    if cpu_mario and card is None and now != tried:
                         # Its presses anywhere but on the character select could open a menu.
                         shot = smash_farm.grab(b)
                         name, dist = smash_farm.screen(shot[0], refs) if shot else ("none", 0)

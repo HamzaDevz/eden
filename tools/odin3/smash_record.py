@@ -234,9 +234,10 @@ def main():
                                 agents[i] = Agent(a.agent, i)
                             active[i] = agents[i]
                 pads = {i: fig_pads[figs[i]] if figs else i for i in active}
-                # Matches of more than two or with people stay apart: training reads one on one
-                # against the CPU only.
-                folder = a.out or ("~/smash-ai/party" if len(fighters) > 2 or fig_pads else
+                # Training reads one AI on one against anyone, people too (their wins show its
+                # flaws): matches of more fighters, of more AIs or of none stay apart.
+                folder = a.out or ("~/smash-ai/party" if len(fighters) > 2 or len(active) > 1
+                                   or (fig_pads and not active) else
                                    "~/smash-ai/play" if active else "~/smash-ai/rec")
                 os.makedirs(os.path.expanduser(folder), exist_ok=True)
                 path = os.path.join(os.path.expanduser(folder), time.strftime("%Y%m%d-%H%M%S")
@@ -331,7 +332,8 @@ def main():
                         b.unpoke(f"kindcopy{i}")
                     kinds_until = 0
                 elif count == 0 and not kinds_until and any(
-                        p[0] & (BUTTON_PLUS | BUTTON_A) for k, p in f.pads.items() if k not in pad_figs):
+                        p[0] & (BUTTON_PLUS | BUTTON_A) for k, p in f.pads.items()
+                        if k not in pad_figs or a.auto):  # --auto presses on the first AI's
                     # The match takes the kind and controller from both tables when it starts:
                     # player cards on the AIs' controllers, built as players, Smash's FIG AI out.
                     # Read from this frame, as + (or A on the "ready" banner) may come right after
@@ -430,7 +432,9 @@ def main():
                     tags = smash_state.names(f, a.players)
                     slot = next((i for i, t in tags.items() if t == a.name), None) if a.agent else None
                     # No tag read: off the character select, most likely.
-                    if relevel and slot == 0 or starts >= NAVIGATE_AFTER and a.agent and slot in (0, None):
+                    # With --pad the character select is left as set: player 1 is someone else's.
+                    if a.pad is None and (relevel and slot == 0 or starts >= NAVIGATE_AFTER
+                                          and a.agent and slot in (0, None)):
                         log("player 1 goes back to the character select")
                         nav = smash_farm.Instance(a.port - 6560, argparse.Namespace(
                             cpu=[], home=os.path.expanduser("~/smash-ai")))
@@ -449,7 +453,7 @@ def main():
                             b.sync(a.sync)
                         starts, picker, relevel = 0, 0, False  # its stick may still show until the match
                         continue
-                    if starts >= PICK_AFTER and slot not in (0, None):
+                    if a.pad is None and starts >= PICK_AFTER and slot not in (0, None):
                         log(f"the match does not start, player {slot + 1} picks Mario")
                         steps, picker = list(PICK), slot
                         continue
@@ -460,7 +464,7 @@ def main():
                     shot = smash_farm.grab(b) if result else None
                     name = smash_farm.screen(shot[0], refs)[0] if shot else "ready"
                     css_seen = css_seen + 1 if name == "css" else 0
-                    if css_seen > 2 and a.agent and slot == 0:
+                    if css_seen > 2 and a.agent and a.pad is None and slot == 0:
                         log("player 1 has no fighter, it picks Mario")
                         if not smash_farm.pick_mario(b, mario, lockstep=bool(a.sync)):
                             log("Mario not found")
@@ -479,7 +483,8 @@ def main():
                     continue  # match loading or ending
                 # Player 1's controller only: on the character select, a press from player 2's
                 # makes it a human player, and the CPU's slot is lost until someone clears it.
-                for i in range(a.players if a.selfplay else 1):
+                # With --pad, the first AI's: player 1's has no card there.
+                for i in [a.pad] if a.pad is not None else range(a.players if a.selfplay else 1):
                     b.pad(i, pressed)
                 press_until = f.index + PRESS_FRAMES
                 next_press = f.index

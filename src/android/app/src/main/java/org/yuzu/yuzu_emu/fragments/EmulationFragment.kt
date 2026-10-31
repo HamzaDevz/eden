@@ -144,7 +144,8 @@ class EmulationFragment : Fragment(), SurfaceHolder.Callback {
     private var isStoppingForRomSwap = false
     private var deferGameSetupUntilStopCompletes = false
 
-    // Set when the Home button suspends the game for the game list, so that coming back resumes it
+    // Set when the Home button suspends the game for the game list, or Android pauses the fragment
+    // (screen off, HDMI replugged, a window on top), so that coming back resumes it
     var resumeOnReturn = false
 
     private var perfStatsRunnable: Runnable? = null
@@ -739,6 +740,7 @@ class EmulationFragment : Fragment(), SurfaceHolder.Callback {
             BooleanSetting.ENABLE_QUICK_SETTINGS.getBoolean()
 
         binding.pausedIcon.setOnClickListener {
+            resumeOnReturn = false
             if (this::emulationState.isInitialized && emulationState.isPaused) {
                 resumeEmulationFromUi()
             }
@@ -768,6 +770,7 @@ class EmulationFragment : Fragment(), SurfaceHolder.Callback {
         binding.inGameMenu.setNavigationItemSelectedListener {
             when (it.itemId) {
                 R.id.menu_pause_emulation -> {
+                    resumeOnReturn = false
                     if (emulationState.isPaused) {
                         resumeEmulationFromUi()
                     } else {
@@ -1466,6 +1469,7 @@ class EmulationFragment : Fragment(), SurfaceHolder.Callback {
         if (this::emulationState.isInitialized) {
             if (emulationState.isRunning && emulationActivity?.isInPictureInPictureMode != true) {
                 pauseEmulationAndCaptureFrame()
+                resumeOnReturn = true
             } else {
                 updatePausedFrameVisibility()
             }
@@ -1502,7 +1506,15 @@ class EmulationFragment : Fragment(), SurfaceHolder.Callback {
 
         if (this::emulationState.isInitialized) {
             b.inGameMenu.post {
-                if (!this::emulationState.isInitialized || _binding == null) return@post
+                val binding = _binding
+                if (!this::emulationState.isInitialized || binding == null) return@post
+                // A surface kept while paused gets no surfaceChanged to resume the game
+                if (resumeOnReturn && emulationState.isPaused &&
+                    binding.surfaceEmulation.holder.surface?.isValid == true
+                ) {
+                    resumeEmulationFromUi()
+                    resumeOnReturn = emulationState.isPaused
+                }
                 updatePauseMenuEntry(emulationState.isPaused)
                 updatePausedFrameVisibility()
             }

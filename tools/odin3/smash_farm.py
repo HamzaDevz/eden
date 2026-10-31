@@ -19,6 +19,7 @@ is restarted too when its recorder saved nothing for --idle seconds, or when the
 """
 import argparse
 import glob
+import itertools
 import os
 import shutil
 import socket
@@ -58,12 +59,19 @@ PADS = {"a": (0x1, 0, 0), "b": (0x2, 0, 0), "dd": (0x8000, 0, 0), "sl": (0, -327
         "sd": (0, 0, -32767)}
 
 
-def play(b, script):
-    """Sends a pad script in lockstep with the game."""
+def play(b, script, lockstep=True):
+    """Sends a pad script in lockstep with the game, or by the clock: over the Odin's WiFi each
+    lockstep frame waits for a round trip, and 200 frames to a corner took 20 s."""
     steps = []
     for tok in script.split():
         k, n = tok.rstrip("0123456789"), int(tok.lstrip("abdlrsuw") or 6)
         steps += [(0, 0, 0)] * n if k == "w" else [PADS[k]] * n + [(0, 0, 0)] * 8
+    if not lockstep:
+        for pad, run in itertools.groupby(steps):
+            b.pad(0, *pad)
+            time.sleep(len(list(run)) / 60)
+        b.release(0)
+        return
     b.ask("stream 1", "ok")
     b.sync(1)
     for _ in b.frames(raw=True):
@@ -121,18 +129,30 @@ def on_mario(shot, mario):
     return np.abs(crop - mario).mean() < 15
 
 
-def pick_mario(b, mario):
+MARIO_AT = []  # moves from the top left corner to Mario, once a sweep found him
+
+
+def pick_mario(b, mario, lockstep=True):
     """Sweeps player 1's hand along rows from the top left corner until its panel shows Mario,
-    then puts the token there; True once done."""
-    play(b, "sl120 su80 w10")
+    then puts the token there; True once done. The next times it goes straight there, with
+    one screenshot to check (each one costs a second from the Odin)."""
+    play(b, "sl120 su80 w10", lockstep)  # pushed into the corner: no need to count frames
+    if MARIO_AT:
+        play(b, " ".join(MARIO_AT))
+        if on_mario(b.shot(360), mario):
+            play(b, "a w30")
+            return True
+        MARIO_AT.clear()
+        play(b, "sl120 su80 w10", lockstep)
     for row in range(12):
         play(b, "sd6")
         for col in range(16):
             play(b, "sr6")
             if on_mario(b.shot(360), mario):
+                MARIO_AT[:] = ["sd6"] * (row + 1) + ["sr6"] * (col + 1)
                 play(b, "a w30")
                 return True
-        play(b, "sl120")
+        play(b, "sl120", lockstep)
     return False
 
 

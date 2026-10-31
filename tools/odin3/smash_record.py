@@ -387,7 +387,7 @@ def main():
                     css_seen = css_seen + 1 if name == "css" else 0
                     if css_seen > 2 and a.agent and slot == 0:
                         log("player 1 has no fighter, it picks Mario")
-                        if not smash_farm.pick_mario(b, mario):
+                        if not smash_farm.pick_mario(b, mario, lockstep=bool(a.sync)):
                             log("Mario not found")
                         b.ask("stream 1", "ok")  # play stops the stream when done
                         if a.sync:

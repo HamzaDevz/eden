@@ -53,6 +53,10 @@ WIN = 3
 # often (0.37 a match against 0.17): in the measure of a model, each such fall costs a stock more.
 UNHIT = 240
 SELF_DESTRUCT = 1
+# An attack or special the other fighter does not feel within WHIFF_WINDOW frames costs WHIFF:
+# a landed smash was worth a lot and a missed one nothing, so Ultimus swung in the void.
+WHIFF = 0.03
+WHIFF_WINDOW = 40
 
 
 def log(*args):
@@ -87,10 +91,19 @@ def offstage(d, me):
     return (d["situation"][:, me] == 2) & ((d["y"][:, me] < -5) & (x > 50) | (x > EDGE + 5))
 
 
+def whiffs(d, me):
+    """Attack or special presses on the stage that hit nothing within WHIFF_WINDOW frames."""
+    b = d["buttons"][:, me].astype(np.int64) & 0x3
+    pressed = (b & ~np.r_[0, b[:-1]]) > 0
+    hits = np.cumsum(gain(d["damage"][:, 1 - me]) > 0)
+    later = hits[np.minimum(np.arange(len(hits)) + WHIFF_WINDOW, len(hits) - 1)]
+    return pressed & (later == hits) & ~offstage(d, me)
+
+
 def returns(d, me):
     """Discounted return of each frame, next to whether the fighter is off the stage."""
     off = offstage(d, me)
-    r = reward(d, me) - OFFSTAGE_COST * off
+    r = reward(d, me) - OFFSTAGE_COST * off - WHIFF * whiffs(d, me)
     g, acc = np.zeros(len(r), np.float32), 0.0
     for t in range(len(r) - 1, -1, -1):
         acc = r[t] + GAMMA * acc

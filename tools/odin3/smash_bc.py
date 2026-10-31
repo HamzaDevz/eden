@@ -28,6 +28,10 @@ CONT = 2 * 10 + 2  # per fighter continuous features, then the relative position
 SIGHT = 2 * 5 + 2  # then since 31/10, what the state alone hid: per fighter, then the stage
 STAGES = (0, 3)  # Battlefield, Final Destination
 EDGE = 80  # |x| of both stages' ledges
+# Drawn as they were every frame, a 2 % chance of A made some 70 attacks a minute, and a stick
+# drawn toward an edge turned them into smashes in the void: 51 a minute against 3 for the CPU 9
+# (31/10). The logits are divided by this before drawing, so only clear choices are played.
+TEMPERATURE = 0.3
 
 
 def fighter_features(d, i, sign):
@@ -183,9 +187,9 @@ class Agent:
         logits, blogits, _, self.h = self.model(
             t(cont[-1], torch.float32), t(cat[-1], torch.long), t(self.stick, torch.long),
             t(self.buttons, torch.float32), self.h)
-        probs = torch.softmax(logits[0, 0], -1).numpy()
+        probs = torch.softmax(logits[0, 0] / TEMPERATURE, -1).numpy()
         self.stick = [int(self.rng.choice(BINS, p=p / p.sum())) for p in probs]
-        bprobs = torch.sigmoid(blogits[0, 0]).numpy()
+        bprobs = torch.sigmoid(blogits[0, 0] / TEMPERATURE).numpy()
         self.buttons = [float(self.rng.random() < p) for p in bprobs]
         back = self.recover(me, prev.get(self.me, me))
         if back:

@@ -30,7 +30,9 @@ STAGES = (0, 3)  # Battlefield, Final Destination
 EDGE = 80  # |x| of both stages' ledges
 # Drawn as they were every frame, a 2 % chance of A made some 70 attacks a minute, and a stick
 # drawn toward an edge turned them into smashes in the void: 51 a minute against 3 for the CPU 9
-# (31/10). The logits are divided by this before drawing, so only clear choices are played.
+# (31/10). The stick's logits are divided by this before drawing, so only clear directions are
+# played. Not the buttons': a press is a rare event every frame, and sharpened it nearly vanished
+# (1 attack a minute, 4 to 13 % dealt a match instead of 120 to 165).
 TEMPERATURE = 0.3
 
 
@@ -189,7 +191,7 @@ class Agent:
             t(self.buttons, torch.float32), self.h)
         probs = torch.softmax(logits[0, 0] / TEMPERATURE, -1).numpy()
         self.stick = [int(self.rng.choice(BINS, p=p / p.sum())) for p in probs]
-        bprobs = torch.sigmoid(blogits[0, 0] / TEMPERATURE).numpy()
+        bprobs = torch.sigmoid(blogits[0, 0]).numpy()
         self.buttons = [float(self.rng.random() < p) for p in bprobs]
         back = self.recover(me, prev.get(self.me, me))
         if back:

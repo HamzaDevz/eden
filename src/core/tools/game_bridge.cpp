@@ -8,6 +8,9 @@
 //   watch <id> <len> <base> [off...]  base is an address or main+<off>; each off dereferences
 //                                     the u64 at the current address and adds itself
 //   unwatch <id|*>, stream <0|1>
+//   poke <id> <hex> <base> [off...]   writes the bytes at the watch-style address now and again on
+//                                     every frame, like a cheat, until unpoke <id|*>; unpoke and
+//                                     a disconnect leave the last value written
 //   pad <player> <buttons> <lx> <ly> <rx> <ry>   player is the npad index (8 = handheld),
 //                                     buttons the low 16 npad bits (A to D-pad down, the same in
 //                                     TAS), sticks -32767..32767
@@ -97,6 +100,32 @@ struct GameBridge::Impl {
         std::vector<s64> offsets;
     };
 
+    struct Poke {
+        Watch where;
+        std::vector<u8> data;
+    };
+
+    static void ParseAddress(Watch& watch, const std::vector<std::string>& args, std::size_t at) {
+        const auto& base = args[at];
+        watch.from_main = base.starts_with("main");
+        watch.base = watch.from_main ? (base.size() > 5 ? ParseU64(base.substr(5)) : 0)
+                                     : ParseU64(base);
+        for (std::size_t i = at + 1; i < args.size(); ++i) {
+            watch.offsets.push_back(ParseS64(args[i]));
+        }
+    }
+
+    static std::vector<u8> ParseHex(const std::string& text) {
+        if (text.size() % 2 != 0) {
+            throw std::invalid_argument("hex");
+        }
+        std::vector<u8> out(text.size() / 2);
+        for (std::size_t i = 0; i < out.size(); ++i) {
+            out[i] = static_cast<u8>(std::stoul(text.substr(i * 2, 2), nullptr, 16));
+        }
+        return out;
+    }
+
     Impl(Core::System& system_, u16 port, GameBridgePadSink pad_sink_)
         : system{system_}, pad_sink{std::move(pad_sink_)}, acceptor{io_context} {
         try {
@@ -138,6 +167,12 @@ struct GameBridge::Impl {
         if (u64 until = step_until.load(); until != 0 && current >= until &&
             step_until.compare_exchange_strong(until, 0)) {
             boost::asio::post(io_context, [this] { EndStep(); });
+        }
+        if (has_pokes && !poke_pending.exchange(true)) {
+            boost::asio::post(io_context, [this] {
+                poke_pending = false;
+                ApplyPokes();
+            });
         }
         if (!streaming || publish_pending.exchange(true)) {
             return;
@@ -201,6 +236,8 @@ private:
         step_until = 0;
         Resume();
         watches.clear();
+        pokes.clear();
+        has_pokes = false;
         ReleasePads();
         LOG_INFO(Core, "Game bridge client disconnected");
     }
@@ -288,16 +325,28 @@ private:
             if (watch.length == 0 || watch.length > MaxWatch) {
                 throw std::invalid_argument("length");
             }
-            const auto& base = args[3];
-            watch.from_main = base.starts_with("main");
-            watch.base = watch.from_main ? (base.size() > 5 ? ParseU64(base.substr(5)) : 0)
-                                         : ParseU64(base);
-            for (std::size_t i = 4; i < args.size(); ++i) {
-                watch.offsets.push_back(ParseS64(args[i]));
-            }
+            ParseAddress(watch, args, 3);
             std::erase_if(watches, [&](const Watch& w) { return w.id == watch.id; });
             watches.push_back(std::move(watch));
             Send("ok watch\n");
+        } else if (command == "poke" && args.size() >= 4) {
+            Poke poke{.data = ParseHex(args[2])};
+            poke.where.id = args[1];
+            poke.where.length = poke.data.size();
+            if (poke.data.empty() || poke.data.size() > MaxWatch) {
+                throw std::invalid_argument("data");
+            }
+            ParseAddress(poke.where, args, 3);
+            const bool written = WritePoke(poke);
+            std::erase_if(pokes, [&](const Poke& p) { return p.where.id == poke.where.id; });
+            pokes.push_back(std::move(poke));
+            has_pokes = true;
+            Send(written ? "ok poke\n" : "ok poke -\n");
+        } else if (command == "unpoke" && args.size() == 2) {
+            std::erase_if(pokes,
+                          [&](const Poke& p) { return args[1] == "*" || p.where.id == args[1]; });
+            has_pokes = !pokes.empty();
+            Send("ok unpoke\n");
         } else if (command == "unwatch" && args.size() == 2) {
             std::erase_if(watches, [&](const Watch& w) { return args[1] == "*" || w.id == args[1]; });
             Send("ok unwatch\n");
@@ -458,6 +507,19 @@ private:
         AppendHex(out, scratch);
     }
 
+    bool WritePoke(const Poke& poke) {
+        const auto address = Resolve(poke.where);
+        auto& memory = system.ApplicationMemory();
+        return address && memory.IsValidVirtualAddressRange(*address, poke.data.size()) &&
+               memory.WriteBlockUnsafe(*address, poke.data.data(), poke.data.size());
+    }
+
+    void ApplyPokes() {
+        for (const auto& poke : pokes) {
+            WritePoke(poke);
+        }
+    }
+
     std::optional<u64> Resolve(const Watch& watch) {
         u64 address = watch.base;
         if (watch.from_main) {
@@ -522,6 +584,8 @@ private:
     std::atomic<u64> frame{};
     std::atomic_bool streaming{};
     std::atomic_bool publish_pending{};
+    std::atomic_bool has_pokes{};
+    std::atomic_bool poke_pending{};
 
     std::mutex sync_mutex;
     std::condition_variable sync_cv;
@@ -533,6 +597,7 @@ private:
     bool paused{};
 
     std::vector<Watch> watches;
+    std::vector<Poke> pokes;
     std::vector<u8> shot_data;
     std::vector<u8> scratch;
     u32 pads_set{};

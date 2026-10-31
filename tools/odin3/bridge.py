@@ -74,6 +74,14 @@ class Bridge:
         wid, length, base, *offs = spec.split(":")
         return self.ask(f"watch {wid} {length} {base} {' '.join(offs)}".strip(), "ok")
 
+    def poke(self, pid, data, base, *offs):
+        """Writes data (bytes) at the watch-style address now and on every frame until unpoke."""
+        return self.ask(f"poke {pid} {data.hex()} {base} {' '.join(f'{o:#x}' for o in offs)}"
+                        .strip(), "ok")
+
+    def unpoke(self, pid="*"):
+        return self.ask(f"unpoke {pid}", "ok")
+
     def pad(self, player, buttons=0, lx=0, ly=0, rx=0, ry=0):
         self.send(f"pad {player} {buttons:#x} {lx} {ly} {rx} {ry}")
 

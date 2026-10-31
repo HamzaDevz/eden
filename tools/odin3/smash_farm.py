@@ -14,8 +14,12 @@ smash_rl.py raises), then starts smash_record.py, which starts the matches. Ulti
 models/champion.pt on the instances listed by --champion and the candidate models/ultimus.pt on
 the others, so that smash_rl.py compares them on matches played at the same time. An instance
 is restarted too when its recorder saved nothing for --idle seconds, or when the level changed.
+With --figs the AIs play as on the Odin: their controllers (8, then 7...) go back in on the title
+screen, the first one goes to the character select, where smash_record.py makes its player card
+its FIG card, puts its amiibo (ROOT\\k\\amiibo) and plays it with --pad 7, in the same conditions.
 
-  smash_farm.py --instances 0 1 [--cpu 0] [--champion 0] [--every 5400] [--idle 900]
+  smash_farm.py --instances 0 1 [--cpu 0] [--champion 0] [--figs Ultimus,...] [--every 5400]
+                [--idle 900]
 """
 import argparse
 import glob
@@ -55,11 +59,14 @@ TO_LEVEL = "sr120 sd80 w10 sl27 su12 w10"
 SPIRAL = []
 for ring in range(1, 9):  # right 1, down 1, left 2, up 2, right 3...
     SPIRAL += [("sr4", "sd4", "sl4", "su4")[(ring - 1) % 4]] * ((ring + 1) // 2)
+# With --figs, as on the Odin: the first AI's controller goes to the character select, where its
+# player card is the first, which the recorder turns into its FIG card and puts its amiibo on.
+FIG_PAD = 7
 PADS = {"a": (0x1, 0, 0), "b": (0x2, 0, 0), "dd": (0x8000, 0, 0), "sl": (0, -32767, 0), "sr": (0, 32767, 0), "su": (0, 0, 32767),
         "sd": (0, 0, -32767)}
 
 
-def play(b, script, lockstep=True):
+def play(b, script, lockstep=True, pad=0):
     """Sends a pad script in lockstep with the game, or by the clock: over the Odin's WiFi each
     lockstep frame waits for a round trip, and 200 frames to a corner took 20 s."""
     steps = []
@@ -67,18 +74,18 @@ def play(b, script, lockstep=True):
         k, n = tok.rstrip("0123456789"), int(tok.lstrip("abdlrsuw") or 6)
         steps += [(0, 0, 0)] * n if k == "w" else [PADS[k]] * n + [(0, 0, 0)] * 8
     if not lockstep:
-        for pad, run in itertools.groupby(steps):
-            b.pad(0, *pad)
+        for step, run in itertools.groupby(steps):
+            b.pad(pad, *step)
             time.sleep(len(list(run)) / 60)
-        b.release(0)
+        b.release(pad)
         return
     b.ask("stream 1", "ok")
     b.sync(1)
     for _ in b.frames(raw=True):
         if not steps:
             break
-        b.pad(0, *steps.pop(0))
-    b.release(0)
+        b.pad(pad, *steps.pop(0))
+    b.release(pad)
     b.sync(0)
     b.ask("stream 0", "ok")
 
@@ -132,27 +139,27 @@ def on_mario(shot, mario):
 MARIO_AT = []  # moves from the top left corner to Mario, once a sweep found him
 
 
-def pick_mario(b, mario, lockstep=True):
+def pick_mario(b, mario, lockstep=True, pad=0):
     """Sweeps player 1's hand along rows from the top left corner until its panel shows Mario,
     then puts the token there; True once done. The next times it goes straight there, with
     one screenshot to check (each one costs a second from the Odin)."""
-    play(b, "sl120 su80 w10", lockstep)  # pushed into the corner: no need to count frames
+    play(b, "sl120 su80 w10", lockstep, pad)  # pushed into the corner: no need to count frames
     if MARIO_AT:
-        play(b, " ".join(MARIO_AT))
+        play(b, " ".join(MARIO_AT), pad=pad)
         if on_mario(b.shot(360), mario):
-            play(b, "a w30")
+            play(b, "a w30", pad=pad)
             return True
         MARIO_AT.clear()
-        play(b, "sl120 su80 w10", lockstep)
+        play(b, "sl120 su80 w10", lockstep, pad)
     for row in range(12):
-        play(b, "sd6")
+        play(b, "sd6", pad=pad)
         for col in range(16):
-            play(b, "sr6")
+            play(b, "sr6", pad=pad)
             if on_mario(b.shot(360), mario):
                 MARIO_AT[:] = ["sd6"] * (row + 1) + ["sr6"] * (col + 1)
-                play(b, "a w30")
+                play(b, "a w30", pad=pad)
                 return True
-        play(b, "sl120", lockstep)
+        play(b, "sl120", lockstep, pad)
     return False
 
 
@@ -178,6 +185,7 @@ class Instance:
         self.dir = os.path.join(ROOT, str(k))
         self.log = os.path.join(a.home, f"rec{k}.log")
         self.cpu, self.level, self.started = k in a.cpu, 9, 0
+        self.pad = FIG_PAD if a.figs and not self.cpu else 0  # the controller that goes to the select
         self.refs = load_refs()
         digits = np.load(LEVELS)
         self.digits = {int(n[5:]): digits[n].astype(np.float32) for n in digits.files}
@@ -211,18 +219,18 @@ class Instance:
             if name == "dark":
                 time.sleep(2)
             elif name == "unknown":
-                play(b, LOST[lost % len(LOST)])
+                play(b, LOST[lost % len(LOST)], pad=self.pad)
                 lost += 1
             elif name in ROUTE:
-                play(b, ROUTE[name])
+                play(b, ROUTE[name], pad=self.pad)
             else:
                 break
         else:
             return False
         if name == "css":
             if self.cpu:  # the select forgets that player 1 was a CPU: the player button first
-                play(b, "sd22 w10 a w30")
-            if not pick_mario(b, self.mario):
+                play(b, "sd22 w10 a w30", pad=self.pad)
+            if not pick_mario(b, self.mario, pad=self.pad):
                 log(f"instance {self.k}: Mario not found")
             shot = grab(b)
             name = screen(shot[0], self.refs)[0] if shot else "none"
@@ -234,10 +242,10 @@ class Instance:
 
     def set_level(self, b):
         """Sets player 2's level through its list; True once the box shows it."""
-        play(b, TO_LEVEL)
+        play(b, TO_LEVEL, pad=self.pad)
         for move in [None] + SPIRAL:
             if move:
-                play(b, move)
+                play(b, move, pad=self.pad)
             shot = b.shot(360)
             if level_box(shot) > 200:
                 break
@@ -246,7 +254,7 @@ class Instance:
             return False
         level = read_level(shot, self.digits)
         if level is not None and level != self.level:
-            play(b, "a w30 " + "dd " * ((level - self.level) % 9) + "a w30")
+            play(b, "a w30 " + "dd " * ((level - self.level) % 9) + "a w30", pad=self.pad)
             level = read_level(b.shot(360), self.digits)
         log(f"instance {self.k}: level {level}")
         return level == self.level
@@ -283,6 +291,10 @@ class Instance:
                 else:
                     time.sleep(2)
         try:
+            # The launch unplugs all but player 1's controller: the AIs' ones go back in before
+            # the character select, where the first AI's takes the first card, as on the Odin.
+            for k in range(len(self.a.figs.split(",")) if self.a.figs and not self.cpu else 0):
+                b.plug(FIG_PAD - k)
             return self.navigate(b)
         except (OSError, RuntimeError) as e:
             log(f"instance {self.k}: {e}")
@@ -307,6 +319,9 @@ class Instance:
                 ["--agent", os.path.join(self.a.home, "models",
                                          "champion.pt" if self.k in self.a.champion else "ultimus.pt"),
                  "--out", os.path.join(self.a.home, "play")])
+        if self.a.figs and not self.cpu:  # the Odin's way: its pads 5 to 8 connected at boot
+            mode += ["--players", "8", "--pad", str(FIG_PAD), "--figs", self.a.figs,
+                     "--amiibo", os.path.join(self.dir, "amiibo")]
         with open(self.log, "a") as out:
             subprocess.Popen([sys.executable, "-u", "smash_record.py", "--port", str(self.port),
                               "--sync", "1", "--auto", "--min-battery", "0",
@@ -324,6 +339,8 @@ def main():
                     help="instances where CPU plays against CPU, into HOME\\rec")
     ap.add_argument("--champion", type=int, nargs="*", default=[0],
                     help="instances where Ultimus plays the champion instead of the candidate")
+    ap.add_argument("--figs", help="the AIs play their FIG cards as on the Odin (Ultimus,...), "
+                    "from ROOT\\k\\amiibo")
     ap.add_argument("--every", type=int, default=1800, help="restart after this many seconds")
     ap.add_argument("--idle", type=int, default=900, help="restart when nothing was saved for this long")
     a = ap.parse_args()

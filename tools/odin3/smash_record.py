@@ -53,7 +53,7 @@ from bridge import Bridge, Frame
 ADB = os.path.expanduser("~/Library/Android/sdk/platform-tools/adb")
 LOCK = "/data/local/tmp/odin3.lock"
 PRESS_FRAMES, PRESS_EVERY = 6, 90
-BUTTON_A, BUTTON_PLUS = 0x1, 0x400
+BUTTON_A, BUTTON_B, BUTTON_PLUS = 0x1, 0x2, 0x400
 # When + does not start the match, the agent's player has lost its fighter (a late A on the
 # character select): its hand goes to the top left corner, then onto the first fighter, Mario.
 # For player 1, smash_farm finds its way back to the character select (the presses may have
@@ -120,6 +120,7 @@ def main():
     ap.add_argument("--pad", type=int, help="the first AI's own controller (0 for player 1) "
                     "instead of a name tag: it plays the FIG cards of the AIs")
     ap.add_argument("--figs", help="with --pad, the AIs, comma separated (--name by default)")
+    ap.add_argument("--amiibo", default=AMIIBO, help="with --pad, the folder of their <name>.bin")
     ap.add_argument("--sparring", action="store_true", help="let the agent face a local human")
     ap.add_argument("--selfplay", action="store_true", help="the agent plays every human slot")
     ap.add_argument("--level", type=int, help="level of the CPU, kept in the match header")
@@ -146,9 +147,12 @@ def main():
                 for i, (nick, pad) in smash_state.card_owners(f).items()}
 
     def agent(i, name):
+        # The first AI plays --agent (on the PC the champion or the candidate), the others their
+        # own model next to it.
         own = os.path.join(os.path.dirname(os.path.expanduser(a.agent)),
                            name.lower() + os.path.splitext(a.agent)[1])
-        path = own if os.path.exists(own) else os.path.expanduser(a.agent)
+        first = (a.figs or a.name).split(",")[0]
+        path = own if name != first and os.path.exists(own) else os.path.expanduser(a.agent)
         if i not in agents or agents[i].path != path:
             agents[i] = Agent(path, i)
         return agents[i]
@@ -177,7 +181,8 @@ def main():
     starts, steps, picker = 0, [], None  # + presses on this character select, PICK in progress
     relevel = False  # the CPU level to set on the next character select
     unreached = 0  # character selects missed in a row
-    refs, mario, css_seen = smash_farm.load_refs(), np.load(smash_farm.MARIO).astype(np.float32), 0
+    refs, mario = smash_farm.load_refs(), np.load(smash_farm.MARIO).astype(np.float32)
+    css_seen, off_css = 0, 0
     quiet, quiet_until = set(), 0  # slots the agent played, their last input still shows a while
     pads = {}  # the controller playing each slot the agent plays
     join_steps, next_look, seen = [], 0, None  # with --pad: a REFIG in progress, the next look
@@ -392,7 +397,7 @@ def main():
                     if placed and f.index >= placed_until:
                         b.amiibo()
                         placed = None
-                    elif back and not placed and b.amiibo(f"{AMIIBO}/{back[0][1]}.bin"):
+                    elif back and not placed and b.amiibo(os.path.join(a.amiibo, f"{back[0][1]}.bin")):
                         placed, placed_until = back[0][1], f.index + PLACED_FOR
                         log(f"{placed}'s amiibo back on the reader for card {back[0][0] + 1}")
                     # A player card on an AI's controller: never the AI's, back to its FIG card.
@@ -490,7 +495,11 @@ def main():
                     if name == "dark":  # between two screens: wait for the next one
                         next_press = f.index
                         continue
-                    pressed = BUTTON_PLUS if name in ("css", "ready") else BUTTON_A
+                    # Off the select: the results, or a challenge met, which only player 1's
+                    # controller closes, by A on its picture then B on the board.
+                    off_css = 0 if name in ("css", "ready") else off_css + 1
+                    pressed = (BUTTON_PLUS if not off_css else
+                               BUTTON_B if off_css % 2 == 0 else BUTTON_A)
                 elif result:
                     pressed = BUTTON_A  # results
                 else:
@@ -498,7 +507,8 @@ def main():
                 # Player 1's controller only: on the character select, a press from player 2's
                 # makes it a human player, and the CPU's slot is lost until someone clears it.
                 # With --pad, the first AI's: player 1's has no card there.
-                for i in [a.pad] if a.pad is not None else range(a.players if a.selfplay else 1):
+                for i in ([a.pad, 0] if off_css else [a.pad]) if a.pad is not None else \
+                        range(a.players if a.selfplay else 1):
                     b.pad(i, pressed)
                 press_until = f.index + PRESS_FRAMES
                 next_press = f.index

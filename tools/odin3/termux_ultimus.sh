@@ -12,8 +12,8 @@ while true; do
     # results; a press on someone else's controller stops that and gives the Odin back.
     python smash_record.py --players 8 --pad 7 --figs Ultimus,Optimus,Nostradamus,Magnus \
       --agent ~/smash-ai/models/ultimus.npz --sparring --min-battery 0 \
-      $([ -e ~/smash-ai/train ] && echo --auto) >> ~/smash-ai/ultimus.log 2>&1 &&
-      [ -e ~/smash-ai/train ] && rm ~/smash-ai/train && echo "$(date +%T) Odin given back" >> ~/smash-ai/ultimus.log
+      $([ -e ~/smash-ai/train ] && echo --auto) >> ~/smash-ai/ultimus.log 2>&1
+    [ $? = 4 ] && rm -f ~/smash-ai/train && echo "$(date +%T) Odin given back" >> ~/smash-ai/ultimus.log
   fi
   sleep 30
 done

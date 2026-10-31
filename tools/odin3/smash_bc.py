@@ -38,6 +38,17 @@ TEMPERATURE = 0.3
 # the other fighter within REACH on both axes. Ultimus hit with 10 % of its presses, half of its
 # misses from 30 or more away; this cuts 63 % of them and keeps 73 % of the presses that hit (31/10).
 REACH = 30
+# Status kinds (StatusModule) read off Mario's own presses on 31/10: shield, jab to air attack,
+# grab startups, Mario holding the other fighter (0x3d, then 0x40 throwing), held by it, then the
+# specials.
+SHIELD = range(0x1B, 0x1F)
+ATTACK = range(0x27, 0x37)
+GRAB = range(0x37, 0x3C)
+HOLDING = range(0x38, 0x3E)
+HELD = range(0x41, 0x45)
+SPECIAL = 0x1DC
+A, B, X, ZR = 0x1, 0x2, 0x4, 0x200
+RULES = 2  # version of Agent.rules, kept in the match header
 
 
 def fighter_features(d, i, sign):
@@ -113,6 +124,7 @@ class Policy(nn.Module):
 
 class Agent:
     """Plays fighter `me` with a trained Policy, one step per bridge frame."""
+    RULES = RULES
     STATE = ("kind", "status", "situation", "x", "y", "lr", "damage", "stock", "motion_frame",
              "stick_x", "stick_y", "buttons", *smash_state.EYES)
 
@@ -140,6 +152,7 @@ class Agent:
         self.stick, self.buttons = [BINS // 2] * 2, [0.0] * len(BUTTON_BITS)
         self.recovery = self.since = self.jumps = 0  # recovery 0 drifting, 1 jumped, 2 up special
         self.rose = False
+        self.sent, self.wait, self.fire = (0, 0.0, 0.0), 0, 0
 
     def recover(self, me, prev):
         """Mario's way back to the stage, or None while the model plays.
@@ -170,6 +183,84 @@ class Agent:
             self.recovery, self.since = 2, 0
             return 0x2, lx * 0.25, 1  # up special, a little toward the stage
         return 0, lx, 0
+
+    def rules(self, me, o, pme, po):
+        """Mario's pad on the stage, or None where the model plays (in the air).
+
+        Against the CPU: shield what it throws when close and grab out of shield once the shield
+        is hit, grab a shield, follow a hit with up tilts, up smash what falls from above, keep
+        the fireball for afar, and wait at the ledge for a fighter coming back."""
+        side = 1 if o.x > me.x else -1
+        dx, dy = abs(o.x - me.x), o.y - me.y
+        prev_mask, plx, ply = self.sent
+        neutral = abs(plx) < 0.2 and abs(ply) < 0.2
+        self.wait, self.fire = max(0, self.wait - 1), max(0, self.fire - 1)
+
+        def press(mask, lx=0.0, ly=0.0):
+            # A and B must be released a frame to count again.
+            return (mask & ~(prev_mask & (A | B)) if prev_mask & mask & (A | B) else mask), lx, ly
+
+        def smash(lx, ly):
+            # A smash takes the stick from rest to the rim with A on the same frame.
+            return press(A, lx, ly) if neutral else (0, 0.0, 0.0)
+
+        if me.status in HELD:
+            return (A if prev_mask & A == 0 else 0), (1.0 if plx <= 0 else -1.0), 0.0  # mash out
+        if me.hitstun > 0:
+            return 0, -np.sign(me.x) * 0.7, 0.7  # in, and up against the blast zone
+        if me.status in HOLDING:
+            return 0, float(np.sign(me.x) or side), 0.0  # throw toward the nearest ledge
+        if me.situation == 1:
+            return (0 if prev_mask & X else X), 0.0, 0.0  # jump from the ledge
+        if me.situation != 0:
+            return None
+        shielding = me.status in SHIELD
+        attacking = o.status in ATTACK or o.status >= SPECIAL
+        if shielding and me.shield < pme.shield - 1:
+            return press(A | ZR)  # the shield took a hit: grab out of it
+        if dx < 22 and -10 < dy < 18 and o.status in GRAB:
+            return press(ZR, 0.0, -1.0)  # spot dodge the grab
+        if dx < 30 and -10 < dy < 25 and attacking and me.shield > 15:
+            return ZR, 0.0, 0.0
+        o_off = abs(o.x) > EDGE + 5 or o.y < -5 and abs(o.x) > 50 and o.situation == 2
+        if o_off or o.situation == 1:
+            # At the ledge, facing out: fireballs while it is out there, then what gets up.
+            spot = np.sign(o.x) * (EDGE - 15)
+            if abs(me.x - spot) > 4:
+                return 0, float(np.sign(spot - me.x)) * 0.6, 0.0
+            if me.lr != side:
+                return 0, side * 0.3, 0.0
+            if o_off and not self.fire:
+                self.fire = 45
+                return press(B)
+            return 0, 0.0, 0.0
+        close = dx < 22 and -10 < dy < 18
+        if o.hitstun > 0 and dx < 20:
+            if 5 < dy < 35:
+                return press(A, 0.0, 0.45)  # up tilt
+            if o.damage > 100 and dy < 8:
+                return smash(side, 0.0)
+            return press(A)
+        if dx < 15 and 10 <= dy < 30 and o.situation == 2 and o.y < po.y:
+            return smash(0.0, 1.0)  # up smash, Mario's head is intangible
+        if close:
+            if o.status in SHIELD:
+                return press(A | ZR)  # grab beats shield
+            # Every 25 frames, 2 of 3 whiffed on the Odin and a missed grab got grabbed back.
+            if not self.wait:
+                self.wait = 45
+                return press(A | ZR) if self.rng.random() < 0.3 else press(A, 0.0, 0.45 if dy > 5 else 0.0)
+            return 0, 0.0, 0.0
+        if abs(me.x) > EDGE - 12 and abs(o.x) < abs(me.x):
+            return 0, -np.sign(me.x) * 0.6, 0.0  # away from our own ledge
+        if dx > 50:
+            if me.lr != side:
+                return 0, side * 0.3, 0.0
+            if not self.fire:
+                self.fire = 40
+                return press(B)
+            return 0, 0.0, 0.0
+        return 0, side * 0.6, 0.0  # walk in
 
     def pad(self, mask, lx, ly):
         return mask, int(lx * 32767), int(ly * 32767)
@@ -202,9 +293,10 @@ class Agent:
             self.buttons[0] = 0.0
             if self.stick != [BINS // 2] * 2:
                 self.buttons[1] = 0.0
-        back = self.recover(me, prev.get(self.me, me))
+        back = self.recover(me, prev.get(self.me, me)) or self.rules(me, o, prev.get(self.me, me), prev.get(other, o))
         if back:
             mask, lx, ly = back
+            self.sent = back
             # What it sends is the model's previous pad on the next frame.
             self.stick = [int(round(v * (BINS // 2))) + BINS // 2 for v in (lx, ly)]
             self.buttons = [float(bool(mask & m)) for m in (0x1, 0x2, 0x4, 0x200)]
@@ -212,6 +304,7 @@ class Agent:
         # attack A, special B, jump X, guard ZR
         mask = sum(m for m, on in zip((0x1, 0x2, 0x4, 0x200), self.buttons) if on)
         lx, ly = ((s - BINS // 2) / (BINS // 2) for s in self.stick)
+        self.sent = mask, lx, ly
         return self.pad(mask, lx, ly)
 
 

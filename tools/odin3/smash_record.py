@@ -213,7 +213,8 @@ def main():
                           "names": tags, "agent": a.agent if active or probe is not None else None,
                           "me": me, "pad": a.pad,
                           "agents": sorted(active), "level": a.level, "sync": a.sync,
-                          "version": next(iter(active.values())).model.version if active else None}
+                          "version": next(iter(active.values())).model.version if active else None,
+                          "rules": next(iter(active.values())).RULES if active else None}
                 out.write("# " + json.dumps(header) + "\n")
                 frames, gaps, last = 0, 0, None
                 log(f"match -> {path}" + (f", {a.name} is player {me + 1}" if me is not None else

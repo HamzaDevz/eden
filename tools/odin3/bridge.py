@@ -10,7 +10,7 @@
 #   bridge.py shot <out.png> [height]   the next presented frame (Vulkan or OpenGL renderer)
 #   bridge.py step <frames> [out.png] [height]   runs that many frames then leaves the game paused
 # Players are npad indices: 0-7 for players 1-8, 8 for handheld.
-import argparse, socket, struct, sys, time, zlib
+import argparse, collections, socket, struct, sys, time, zlib
 
 BUTTONS = ["a", "b", "x", "y", "lstick", "rstick", "l", "r", "zl", "zr", "plus", "minus",
            "left", "up", "right", "down"]
@@ -37,6 +37,7 @@ class Bridge:
         self.sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
         self.file = self.sock.makefile("r")
         self.synced = False
+        self.skipped = collections.deque(maxlen=600)  # frames ask read past, already acked
 
     def send(self, line):
         self.sock.sendall((line + "\n").encode())
@@ -46,20 +47,28 @@ class Bridge:
             yield line.rstrip("\n")
 
     def ask(self, line, reply):
-        # Frames keep streaming, so skip them until the reply arrives.
+        # Frames keep streaming until the reply arrives: frames() still gets them, as a press
+        # may be in one.
         self.send(line)
         for got in self.lines():
             if got.startswith(reply + " ") or got.startswith("err "):
                 return got
-            if self.synced and got.startswith("f "):
-                self.tick(got)
+            if got.startswith("f "):
+                self.skipped.append(got)
+                if self.synced:
+                    self.tick(got)
         raise EOFError
 
     def frames(self, raw=False):
-        for line in self.lines():
+        while True:
+            acked = bool(self.skipped)
+            line = self.skipped.popleft() if acked else self.file.readline()
+            if not line:
+                return
+            line = line.rstrip("\n")
             if line.startswith("f "):
                 yield line if raw else Frame(line)
-                if self.synced:  # the caller is done with this frame
+                if self.synced and not acked:  # the caller is done with this frame
                     self.tick(line)
 
     def sync(self, slack):

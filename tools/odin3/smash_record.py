@@ -330,11 +330,13 @@ def main():
                         b.unpoke(f"kind{i}")
                         b.unpoke(f"kindcopy{i}")
                     kinds_until = 0
-                elif count == 0 and not kinds_until \
-                        and any(p[0] & BUTTON_PLUS for p in f.pads.values()):
+                elif count == 0 and not kinds_until and any(
+                        p[0] & (BUTTON_PLUS | BUTTON_A) for k, p in f.pads.items() if k not in pad_figs):
                     # The match takes the kind and controller from both tables when it starts:
                     # player cards on the AIs' controllers, built as players, Smash's FIG AI out.
-                    # Read from this frame, as + may come right after the amiibo's nickname.
+                    # Read from this frame, as + (or A on the "ready" banner) may come right after
+                    # the amiibo's nickname; an A that starts nothing only makes them player cards
+                    # sooner.
                     owners, converted = card_owners(f), {}
                     for i, (kind, _) in smash_state.cards(f).items():
                         nick = owners.get(i, ("",))[0]

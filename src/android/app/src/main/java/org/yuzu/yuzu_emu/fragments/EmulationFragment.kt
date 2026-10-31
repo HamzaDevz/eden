@@ -153,6 +153,19 @@ class EmulationFragment : Fragment(), SurfaceHolder.Callback {
     private var isAmiiboPickerOpen = false
     private var amiiboLoadJob: Job? = null
 
+    // A game waiting for an amiibo, such as a FIG card in Smash, is offered the ones of the
+    // amiibo folder at once (the AIs' virtual amiibo on the Odin)
+    private val amiiboOfferHandler = Handler(Looper.getMainLooper())
+    private var amiiboWaitingSince = 0L
+    private var amiiboOffered = false
+    private var amiiboOffer: android.app.Dialog? = null
+    private val amiiboOfferRunnable = object : Runnable {
+        override fun run() {
+            offerAmiibo()
+            amiiboOfferHandler.postDelayed(this, 500)
+        }
+    }
+
     private var wasInputOverlayAutoHidden = false
     private var overlayTouchActive = false
     private var pausedFrameBitmap: Bitmap? = null
@@ -1465,7 +1478,61 @@ class EmulationFragment : Fragment(), SurfaceHolder.Callback {
             }
         }
 
+    private fun offerAmiibo() {
+        val waiting = NativeLibrary.isRunning() && AmiiboState.fromValue(
+            NativeLibrary.getVirtualAmiiboState()
+        ) == AmiiboState.WaitingForAmiibo
+        if (!waiting) {
+            amiiboOffer?.dismiss()
+            amiiboOffer = null
+            amiiboWaitingSince = 0L
+            amiiboOffered = false
+            return
+        }
+        val now = SystemClock.uptimeMillis()
+        if (amiiboWaitingSince == 0L) {
+            amiiboWaitingSince = now
+        }
+        // Games also wait for one a moment between two screens, and the AIs' recorder puts theirs
+        // back after a match
+        if (amiiboOffered || isAmiiboPickerOpen || now - amiiboWaitingSince < 2000) {
+            return
+        }
+        amiiboOffered = true
+        val files = requireContext().getExternalFilesDir("amiibo")
+            ?.listFiles { file -> file.extension == "bin" }?.sortedBy { it.name }
+        if (files.isNullOrEmpty()) {
+            return
+        }
+        amiiboOffer = MaterialAlertDialogBuilder(requireContext())
+            .setTitle(R.string.amiibo_title)
+            .setItems(files.map { it.nameWithoutExtension }.toTypedArray()) { _, which ->
+                loadAmiiboFile(files[which])
+            }
+            .setNegativeButton(android.R.string.cancel, null)
+            .setOnDismissListener { amiiboOffer = null }
+            .show()
+    }
+
+    private fun loadAmiiboFile(file: File) {
+        amiiboLoadJob?.cancel()
+        amiiboLoadJob = viewLifecycleOwner.lifecycleScope.launch {
+            val result = withContext(Dispatchers.IO) {
+                val bytes = runCatching { file.readBytes() }.getOrNull()
+                if (bytes != null && NativeLibrary.isRunning()) {
+                    NativeLibrary.loadAmiibo(bytes)
+                } else {
+                    AmiiboLoadResult.Unknown.value
+                }
+            }
+            if (isAdded) {
+                handleAmiiboLoadResult(result)
+            }
+        }
+    }
+
     override fun onPause() {
+        amiiboOfferHandler.removeCallbacks(amiiboOfferRunnable)
         if (this::emulationState.isInitialized) {
             if (emulationState.isRunning && emulationActivity?.isInPictureInPictureMode != true) {
                 pauseEmulationAndCaptureFrame()
@@ -1481,6 +1548,8 @@ class EmulationFragment : Fragment(), SurfaceHolder.Callback {
         super.onDestroyView()
         amiiboLoadJob?.cancel()
         amiiboLoadJob = null
+        amiiboOfferHandler.removeCallbacks(amiiboOfferRunnable)
+        amiiboOffer?.dismiss()
         perfStatsRunnable?.let { perfStatsUpdateHandler.removeCallbacks(it) }
         socRunnable?.let { socUpdateHandler.removeCallbacks(it) }
         handler.removeCallbacksAndMessages(null)
@@ -1501,6 +1570,8 @@ class EmulationFragment : Fragment(), SurfaceHolder.Callback {
         super.onResume()
         NativeLibrary.refreshThreadPolicies()
         val b = _binding ?: return
+        amiiboOfferHandler.removeCallbacks(amiiboOfferRunnable)
+        amiiboOfferHandler.post(amiiboOfferRunnable)
         updateStatsPosition(IntSetting.PERF_OVERLAY_POSITION.getInt())
         updateSocPosition(IntSetting.SOC_OVERLAY_POSITION.getInt())
 

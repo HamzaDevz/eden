@@ -1811,6 +1811,11 @@ bool MainWindow::LoadROM(const QString& filename, Service::AM::FrontendAppletPar
                                   float ry) {
             input->GetTas()->SetLiveInput(player, buttons, {lx, ly}, {rx, ry});
         });
+    QtCommon::system->SetGameBridgeAmiiboSink([input = input_subsystem](const std::string& path) {
+        auto* amiibo = input->GetVirtualAmiibo();
+        return path.empty() ? amiibo->CloseAmiibo() == InputCommon::VirtualAmiibo::Info::Success
+                            : amiibo->LoadAmiibo(path) == InputCommon::VirtualAmiibo::Info::Success;
+    });
     const Core::SystemResultStatus result{
         QtCommon::system->Load(*render_window, filename.toStdString(), params)};
 

@@ -48,7 +48,7 @@ HOLDING = range(0x38, 0x3E)
 HELD = range(0x41, 0x45)
 SPECIAL = 0x1DC
 A, B, X, ZR = 0x1, 0x2, 0x4, 0x200
-RULES = 2  # version of Agent.rules, kept in the match header
+RULES = 3  # version of Agent.rules, kept in the match header
 
 
 def fighter_features(d, i, sign):
@@ -259,8 +259,7 @@ class Agent:
             if not self.fire:
                 self.fire = 40
                 return press(B)
-            return 0, 0.0, 0.0
-        return 0, side * 0.6, 0.0  # walk in
+        return 0, side * 0.6, 0.0  # walk in, also between fireballs (it stood 19 % of the time)
 
     def pad(self, mask, lx, ly):
         return mask, int(lx * 32767), int(ly * 32767)

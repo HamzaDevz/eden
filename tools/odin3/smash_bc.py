@@ -48,7 +48,7 @@ HOLDING = range(0x38, 0x3E)
 HELD = range(0x41, 0x45)
 SPECIAL = 0x1DC
 A, B, X, ZR = 0x1, 0x2, 0x4, 0x200
-RULES = 3  # version of Agent.rules, kept in the match header
+RULES = 4  # version of Agent.rules, kept in the match header
 
 
 def fighter_features(d, i, sign):
@@ -185,11 +185,12 @@ class Agent:
         return 0, lx, 0
 
     def rules(self, me, o, pme, po):
-        """Mario's pad on the stage, or None where the model plays (in the air).
+        """Mario's pad above the stage.
 
-        Against the CPU: shield what it throws when close and grab out of shield once the shield
-        is hit, grab a shield, follow a hit with up tilts, up smash what falls from above, keep
-        the fireball for afar, and wait at the ledge for a fighter coming back."""
+        Shield an attack close by and grab out of shield once the shield is hit, grab a shield,
+        follow a hit with up tilts, up smash what falls from above, poke close by, rush in with
+        short hops, dash attacks and dash grabs, aerials in the air, fireballs from afar, and wait
+        at the ledge for a fighter coming back."""
         side = 1 if o.x > me.x else -1
         dx, dy = abs(o.x - me.x), o.y - me.y
         prev_mask, plx, ply = self.sent
@@ -213,14 +214,19 @@ class Agent:
         if me.situation == 1:
             return (0 if prev_mask & X else X), 0.0, 0.0  # jump from the ledge
         if me.situation != 0:
-            return None
+            # In the air: aerials on a fighter close by, else drift toward it.
+            if dx < 22 and -15 < dy < 25:
+                if dy > 8:
+                    return press(A, 0.0, 1.0)  # up air
+                return press(A, -me.lr, 0.0) if (o.x > me.x) != (me.lr > 0) else press(A)  # back or neutral air
+            return 0, float(side), 0.0
         shielding = me.status in SHIELD
         attacking = o.status in ATTACK or o.status >= SPECIAL
         if shielding and me.shield < pme.shield - 1:
             return press(A | ZR)  # the shield took a hit: grab out of it
         if dx < 22 and -10 < dy < 18 and o.status in GRAB:
             return press(ZR, 0.0, -1.0)  # spot dodge the grab
-        if dx < 30 and -10 < dy < 25 and attacking and me.shield > 15:
+        if dx < 22 and -10 < dy < 20 and attacking and me.shield > 15:
             return ZR, 0.0, 0.0
         o_off = abs(o.x) > EDGE + 5 or o.y < -5 and abs(o.x) > 50 and o.situation == 2
         if o_off or o.situation == 1:
@@ -246,10 +252,21 @@ class Agent:
         if close:
             if o.status in SHIELD:
                 return press(A | ZR)  # grab beats shield
-            # Every 25 frames, 2 of 3 whiffed on the Odin and a missed grab got grabbed back.
+            # Hamza found it not aggressive enough waiting 45 frames between pokes (31/10).
             if not self.wait:
-                self.wait = 45
-                return press(A | ZR) if self.rng.random() < 0.3 else press(A, 0.0, 0.45 if dy > 5 else 0.0)
+                self.wait = 12
+                r = self.rng.random()
+                if o.damage > 90 and abs(dy) < 8 and r < 0.4:
+                    return smash(side, 0.0)
+                if dy > 5:
+                    return press(A, 0.0, 0.45)  # up tilt
+                if r < 0.35:
+                    return press(A)  # jab
+                if r < 0.6:
+                    return press(A, side * 0.5, 0.0)  # forward tilt
+                if r < 0.8:
+                    return press(A, 0.0, -0.5)  # down tilt
+                return press(A | ZR)
             return 0, 0.0, 0.0
         if abs(me.x) > EDGE - 12 and abs(o.x) < abs(me.x):
             return 0, -np.sign(me.x) * 0.6, 0.0  # away from our own ledge
@@ -259,7 +276,13 @@ class Agent:
             if not self.fire:
                 self.fire = 40
                 return press(B)
-        return 0, side * 0.6, 0.0  # walk in, also between fireballs (it stood 19 % of the time)
+        elif dx < 35 and not self.wait:
+            self.wait = 20
+            r = self.rng.random()
+            if r < 0.4:
+                return press(X, side * 0.6, 0.0)  # short hop in: the air rules take it
+            return press(A if r < 0.7 else A | ZR, float(side), 0.0)  # dash attack or dash grab
+        return 0, float(side), 0.0  # run in, also between fireballs (it stood 19 % of the time)
 
     def pad(self, mask, lx, ly):
         return mask, int(lx * 32767), int(ly * 32767)

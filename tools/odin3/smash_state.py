@@ -22,10 +22,15 @@ STAGE_WATCH = "watch stage 4 main+0x532a9d8 0 0x148 8"
 # UTF-16 at +0x28 (10 characters), empty for CPUs.
 PLAYERS, PLAYER_SIZE, NAME = 0x52c5730, 0x260, 0x28
 # Static character select cards, one 0x1c8 entry per card (the 1-based card number at +0): u32
-# kind at +8, ui_chara hash40 of the fighter at +0x10 (ui_chara_random until one is picked).
-CARDS, CARD_SIZE, CARD_KIND, CARD_CHARA = 0x5308798, 0x1c8, 0x8, 0x10
-HUMAN, CPU, NO_CARD = 0, 1, 3
+# kind at +8, ui_chara hash40 of the fighter at +0x10 (ui_chara_random until one is picked),
+# amiibo nickname of a FIG card in UTF-16 at +0xd0 (10 characters, empty while it waits for one).
+CARDS, CARD_SIZE, CARD_KIND, CARD_CHARA, CARD_NICK = 0x5308798, 0x1c8, 0x8, 0x10, 0xd0
+HUMAN, CPU, FIG, NO_CARD = 0, 1, 2, 3
+# Second card table, one 0x240 entry per card: s32 controller (npad, -1 for none) at +0, then a
+# copy of the card at +0x88. The match takes each fighter's kind and controller from both.
+CARD_PADS, CARD_PAD_SIZE, CARD_COPY = 0x53095b0, 0x240, 0x88
 MARIO = 0x0edaf3c863  # hash40("ui_chara_mario")
+ENTRY_PAD = 0x10  # s32 controller of a FighterEntry, -1 for a CPU or a FIG
 
 ACC = (0x4160, 0x20)  # current fighter, then its BattleObjectModuleAccessor
 
@@ -86,7 +91,8 @@ def watch_all(bridge, players, work=False):
 
 def watch_cards(bridge):
     for i in range(8):
-        bridge.ask(f"watch {i}card 0x18 main+{CARDS + i * CARD_SIZE:#x}", "ok")
+        bridge.ask(f"watch {i}card {CARD_NICK + 0x14:#x} main+{CARDS + i * CARD_SIZE:#x}", "ok")
+        bridge.ask(f"watch {i}cpad 4 main+{CARD_PADS + i * CARD_PAD_SIZE:#x}", "ok")
 
 
 def cards(frame):
@@ -99,6 +105,17 @@ def cards(frame):
             if kind != NO_CARD:
                 chara = int.from_bytes(raw[CARD_CHARA:CARD_CHARA + 8], "little")
                 out[i] = kind, chara & (1 << 40) - 1
+    return out
+
+
+def card_owners(frame):
+    """Amiibo nickname and controller (-1 for none) of each character select card."""
+    out = {}
+    for i in range(8):
+        raw, pad = frame.watches.get(f"{i}card"), frame.watches.get(f"{i}cpad")
+        if raw and pad:
+            nick = raw[CARD_NICK:CARD_NICK + 0x14].decode("utf-16-le", "replace").split("\0")[0]
+            out[i] = nick, struct.unpack("<i", pad)[0]
     return out
 
 

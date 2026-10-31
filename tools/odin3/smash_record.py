@@ -14,12 +14,15 @@ to a player on the character select and its controller is the model's for the ma
 Offline only, never against people online: it stops when the other player is not a CPU,
 unless --sparring (local humans) or --selfplay (the model plays every human slot). With
 --players 4 (up to 8) it also plays matches of three or more, kept in ~/smash-ai/party.
-With --pad P (mode IA), a CPU given Mario on the character select is the model's, through
-controller P, its own (player 8 is connected without a pad in Smash's game config): L+R there
-takes a CPU's card (Smash gives one to a joining controller), its hand picks Mario, checked in
-Smash's card table, and at the start of each match it finds its fighter by swinging its stick
-until one fighter's stick follows. It goes before a player tagged with its name, as the Odin's
-own controller keeps the tag of its training when someone plays on it next.
+With --pad P (mode IA), a FIG card on the character select is an AI's: a FIG card waiting for
+its figurine gets the virtual amiibo of an AI not seated yet (AMIIBO/<name>.bin on the console,
+made by amiibo.py and registered once in Smash's amiibo menu), or the player loads one from
+Eden's menu. The AIs are --figs (--name by default), each on its own controller (P, then P-1...)
+with its own model (<name>.pt next to --agent, else --agent). When someone presses + there, the
+FIG cards of AIs become player cards on their controllers, so Smash's amiibo AI never plays
+(its level and learning count for nothing): the model does. The card then stays a player card on
+that controller for the next matches, until it is disconnected on the card; its hand picks Mario
+again when the card lost its fighter.
 Matches with the model go to ~/smash-ai/play, the others to ~/smash-ai/rec. It also stops
 once smash_rl.py writes "selfplay" in ~/smash-ai/phase, for the CPU slot to become a player.
 
@@ -28,7 +31,7 @@ without speed limit never outpaces the agent; --min-battery 0 skips the console 
 
   smash_record.py [--host H] [--port 6560] [--sync K] [--out DIR] [--auto] [--matches N]
                   [--min-battery 15]
-                  [--agent ~/smash-ai/models/ultimus.pt [--name Ultimus | --pad 7]
+                  [--agent ~/smash-ai/models/ultimus.pt [--name Ultimus | --pad 7 [--figs A,B]]
                    [--sparring | --selfplay]]
 """
 import argparse
@@ -67,16 +70,14 @@ def pick_path(down):
 
 
 PICK = pick_path(13)
-# With --pad: L+R takes the card, then a pick path. The grid's rows shrink as matches unlock
-# fighters, so when the card shows another fighter B takes the token back for the next path.
-# The probe's stick swings every PROBE_HALF frames; the stick a fighter reads comes back a few
-# frames later, maybe mirrored.
-JOIN = [(0xc0, 0, 0)] * PRESS_FRAMES + [(0, 0, 0)] * 30
+# With --pad, an AI's card without its fighter: a pick path. The grid's rows shrink as matches
+# unlock fighters, so when the card shows another fighter B takes the token back for the next path.
 RETRY = [(0x2, 0, 0)] * PRESS_FRAMES + [(0, 0, 0)] * 10
 SETTLE = [(0, 0, 0)] * 20  # before the card table shows the pick
 PICK_DOWNS = (7, 13, 4, 10)
-PROBE_HALF, PROBE_WINDOW, PROBE_LAGS, PROBE_FRAMES = 8, 60, 12, 900
 LOOK_EVERY = 180
+AMIIBO = "/storage/emulated/0/Android/data/com.miHoYo.Yuanshen.relWithDebInfo/files/amiibo"
+KINDS_FOR = 600  # frames the FIG cards stay player cards after a + that started no match
 
 
 def log(*args):
@@ -89,21 +90,6 @@ def battery():
         if line.strip().startswith("level:"):
             return int(line.split(":")[1])
     return 100
-
-
-def identify(probe):
-    """Player whose stick followed the probe's over its last PROBE_WINDOW frames, else None."""
-    if len(probe) < PROBE_WINDOW:
-        return None
-    window = probe[-PROBE_WINDOW:]
-    sent = np.sign([x for x, _ in window])
-    n = PROBE_WINDOW - PROBE_LAGS
-    scores = {}
-    for i in window[-1][1]:
-        stick = np.sign([sticks.get(i, 0) for _, sticks in window])
-        scores[i] = max(abs(np.mean(sent[:n] * stick[lag:lag + n])) for lag in range(PROBE_LAGS))
-    second, best = sorted(scores.values())[-2:]
-    return max(scores, key=scores.get) if best > 0.8 and second < 0.5 else None
 
 
 def phase():
@@ -128,8 +114,9 @@ def main():
                     help=f"remove {LOCK} on exit (the caller took it)")
     ap.add_argument("--agent", help="model that plays the player named --name")
     ap.add_argument("--name", default="Ultimus")
-    ap.add_argument("--pad", type=int, help="the agent's own controller (0 for player 1) "
-                    "instead of a name tag: it joins on the character select")
+    ap.add_argument("--pad", type=int, help="the first AI's own controller (0 for player 1) "
+                    "instead of a name tag: it plays the FIG cards of the AIs")
+    ap.add_argument("--figs", help="with --pad, the AIs, comma separated (--name by default)")
     ap.add_argument("--sparring", action="store_true", help="let the agent face a local human")
     ap.add_argument("--selfplay", action="store_true", help="the agent plays every human slot")
     ap.add_argument("--level", type=int, help="level of the CPU, kept in the match header")
@@ -144,6 +131,17 @@ def main():
     agents, active = {}, {}  # model per slot, and the slots it plays this match
     if a.agent:
         from smash_bc import Agent
+    # With --pad: each AI's controller, and the AI on each of them.
+    fig_pads = {name: a.pad - k for k, name in enumerate((a.figs or a.name).split(","))} \
+        if a.pad is not None and a.agent else {}
+    pad_figs = {p: name for name, p in fig_pads.items()}
+
+    def agent(i, name):
+        own = os.path.join(os.path.dirname(os.path.expanduser(a.agent)), name.lower() + ".pt")
+        path = own if os.path.exists(own) else os.path.expanduser(a.agent)
+        if i not in agents or agents[i].path != path:
+            agents[i] = Agent(path, i)
+        return agents[i]
 
     b = Bridge(a.host, a.port)
     b.ask("stream 0", "ok")  # drops the frames sent since the connection
@@ -153,8 +151,11 @@ def main():
     b.ask(f"watch fm 0x50 {smash_state.FIGHTER_MANAGER} 0 0xa0", "ok")
     b.ask(smash_state.STAGE_WATCH, "ok")
     smash_state.watch_all(b, a.players, work=a.pad is None)
-    if a.pad is not None:
+    if fig_pads:
         smash_state.watch_cards(b)
+        for i in range(a.players):
+            b.ask(f"watch {i}npad 4 {smash_state.FIGHTER_MANAGER} 0 {0x20 + i * 8:#x} "
+                  f"{smash_state.ENTRY_PAD:#x}", "ok")
     layout = {name: [length, [f"{o:#x}" for o in offs]]
               for name, (length, offs) in {**smash_state.FIELDS, **smash_state.WORK}.items()}
     b.ask("stream 1", "ok")
@@ -169,8 +170,10 @@ def main():
     refs, mario, css_seen = smash_farm.load_refs(), np.load(smash_farm.MARIO).astype(np.float32), 0
     quiet, quiet_until = set(), 0  # slots the agent played, their last input still shows a while
     pads = {}  # the controller playing each slot the agent plays
-    probe, join_steps, next_look, seen = None, [], 0, None  # with --pad
-    before, card, tries, tried = {}, None, 0, None  # cards before its join, the one it took
+    join_steps, next_look, seen = [], 0, None  # with --pad: a pick in progress, the next look
+    picking, tries, tried = None, 0, None  # (card, controller) it picks on, cards it gave up on
+    fig_cards, waited, placed = {}, set(), None  # AIs' FIG cards, cards waiting, the amiibo out
+    kinds_until, converted = 0, []  # the FIG cards made player cards on a + press
     try:
         for line in b.frames(raw=True):
             f = Frame(line)
@@ -184,14 +187,26 @@ def main():
             fighters = smash_state.parse(f, a.players) if fighting else {}
             if out is None and fighters and len(fighters) == min(count, a.players):
                 tags = smash_state.names(f, a.players)
-                me = next((i for i, t in tags.items() if t == a.name and i in fighters), None) \
-                    if a.agent and card is None else None
+                # With --pad the AIs play the fighters on their controllers, else the tagged one.
+                figs = {}
+                for i in fighters if fig_pads else ():
+                    raw = f.watches.get(f"{i}npad")
+                    pad = int.from_bytes(raw, "little", signed=True) if raw else -1
+                    if pad in pad_figs and not fighters[i].cpu:
+                        figs[i] = pad_figs[pad]
+                if fig_pads:
+                    me = min(figs, default=None)
+                else:
+                    me = next((i for i, t in tags.items() if t == a.name and i in fighters), None) \
+                        if a.agent else None
                 if a.agent and a.pad is None and me is None:  # a match to learn nothing from
                     log(f"no player named {a.name}, stopping")
                     return
-                # A tagged player goes through its own controller, else --pad looks for its fighter.
-                active, probe = {}, [] if a.agent and a.pad is not None and me is None else None
-                if me is not None:
+                if kinds_until or fig_cards:
+                    b.unpoke("*")
+                    fig_cards, kinds_until = {}, 0
+                active = {i: agent(i, name) for i, name in figs.items()}
+                if me is not None and not figs:
                     for i, x in fighters.items():
                         if i != me and not x.cpu and not a.sparring and not a.selfplay:
                             log(f"player {i + 1} is not a CPU, stopping")
@@ -200,10 +215,10 @@ def main():
                             if i not in agents:
                                 agents[i] = Agent(a.agent, i)
                             active[i] = agents[i]
-                pads = {i: i for i in active}
+                pads = {i: fig_pads[figs[i]] if figs else i for i in active}
                 # Matches of more than two or with people stay apart: training reads one on one
                 # against the CPU only.
-                folder = a.out or ("~/smash-ai/party" if len(fighters) > 2 or probe is not None else
+                folder = a.out or ("~/smash-ai/party" if len(fighters) > 2 or fig_pads else
                                    "~/smash-ai/play" if active else "~/smash-ai/rec")
                 os.makedirs(os.path.expanduser(folder), exist_ok=True)
                 path = os.path.join(os.path.expanduser(folder), time.strftime("%Y%m%d-%H%M%S")
@@ -211,15 +226,15 @@ def main():
                 out = gzip.open(path + ".part", "wt", compresslevel=6)
                 header = {"title": info[1], "build": info[2], "players": a.players,
                           "manager": smash_state.FIGHTER_MANAGER, "layout": layout,
-                          "names": tags, "agent": a.agent if active or probe is not None else None,
-                          "me": me, "pad": a.pad,
+                          "names": tags, "agent": a.agent if active else None,
+                          "me": me, "pad": a.pad, "figs": figs,
                           "agents": sorted(active), "level": a.level, "sync": a.sync,
                           "version": next(iter(active.values())).model.version if active else None,
                           "rules": next(iter(active.values())).RULES if active else None}
                 out.write("# " + json.dumps(header) + "\n")
                 frames, gaps, last = 0, 0, None
-                log(f"match -> {path}" + (f", {a.name} is player {me + 1}" if me is not None else
-                                          f", {a.name} looks for its fighter" if probe is not None else ""))
+                who = figs or ({me: a.name} if me is not None else {})
+                log(f"match -> {path}" + "".join(f", {n} is player {i + 1}" for i, n in who.items()))
             if out is not None:
                 if fighting:
                     out.write(line + "\n")
@@ -235,10 +250,7 @@ def main():
                     for i, ag in active.items():
                         ag.reset()
                         b.release(pads[i])
-                    if probe is not None:  # it was not in this match
-                        b.release(a.pad)
-                        probe = None
-                    quiet, quiet_until, active = set(active), f.index + PRESS_EVERY, {}
+                    quiet, quiet_until, active = set(pads.values()), f.index + PRESS_EVERY, {}
                     fighters = smash_state.parse(f, a.players)
                     stage = f.watches.get("stage")
                     log(f"saved {frames} frames, {gaps} gaps, "
@@ -262,69 +274,97 @@ def main():
                             log(f"CPU level {wanted} wanted instead of {a.level}")
                             a.level, relevel = wanted, True
 
-            if probe is not None and fighting:
-                x = 32767 if len(probe) // PROBE_HALF % 2 == 0 else -32767
-                probe.append((x, {i: v.stick_x for i, v in fighters.items()}))
-                me = identify(probe)
-                if me is not None:
-                    log(f"{a.name} is player {me + 1}")
-                    if me not in agents:
-                        agents[me] = Agent(a.agent, me)
-                    active, pads, probe = {me: agents[me]}, {me: a.pad}, None
-                elif len(probe) >= PROBE_FRAMES:
-                    log(f"no fighter follows controller {a.pad + 1}: {a.name} is not in this match")
-                    b.release(a.pad)
-                    probe = None
-                else:
-                    b.pad(a.pad, 0, x, 0)
-
             if active and len(fighters) > 1:
                 for i, ag in active.items():
                     if i in fighters:
                         b.pad(pads[i], *ag.act(fighters))
 
-            if a.pad is not None and a.agent:
+            if fig_pads and not fighting:
                 if join_steps:
-                    b.pad(a.pad, *join_steps.pop(0))
+                    card, pad = picking
+                    b.pad(pad, *join_steps.pop(0))
                     if not join_steps:
-                        b.release(a.pad)
+                        b.release(pad)
                         now = smash_state.cards(f)
-                        if card is None:  # the CPU's card, or a free one Smash gave first
-                            card = next((i for i, (kind, _) in now.items()
-                                         if kind == smash_state.HUMAN
-                                         and before.get(i, (None,))[0] != smash_state.HUMAN), None)
-                            if card is None:
-                                # Its hand is already there: a pick would grab a CPU's token.
-                                log(f"controller {a.pad + 1} took no card")
-                                tried = now
-                            else:
-                                join_steps = pick_path(PICK_DOWNS[0]) + SETTLE
-                        elif now.get(card, (None, None))[1] == smash_state.MARIO:
-                            log(f"{a.name} plays card {card + 1} with Mario")
+                        if now.get(card, (None, None))[1] == smash_state.MARIO:
+                            log(f"{pad_figs[pad]} plays card {card + 1} with Mario")
+                            picking = None
                         elif tries + 1 < len(PICK_DOWNS):
                             tries += 1
                             join_steps = RETRY + pick_path(PICK_DOWNS[tries]) + SETTLE
                         else:
-                            log(f"{a.name} did not get Mario on card {card + 1}")
-                            tried = now
+                            log(f"{pad_figs[pad]} did not get Mario on card {card + 1}")
+                            tried, picking = now, None
+                elif kinds_until and f.index >= kinds_until:
+                    for i in converted:
+                        b.unpoke(f"kind{i}")
+                        b.unpoke(f"kindcopy{i}")
+                    kinds_until = 0
+                elif count == 0 and not kinds_until \
+                        and any(p[0] & BUTTON_PLUS for p in f.pads.values()):
+                    # The match takes the kind and controller from both tables when it starts:
+                    # player cards on the AIs' controllers, built as players, Smash's FIG AI out.
+                    # Read from this frame, as + may come right after the amiibo's nickname.
+                    owners, converted = smash_state.card_owners(f), {}
+                    for i, (kind, _) in smash_state.cards(f).items():
+                        nick = owners.get(i, ("",))[0]
+                        if kind == smash_state.FIG and nick in fig_pads and nick not in converted.values():
+                            b.poke(f"pad{i}", fig_pads[nick].to_bytes(4, "little", signed=True),
+                                   f"main+{smash_state.CARD_PADS + i * smash_state.CARD_PAD_SIZE:#x}")
+                            b.poke(f"kind{i}", bytes(4), f"main+{smash_state.CARDS + i * smash_state.CARD_SIZE + smash_state.CARD_KIND:#x}")
+                            b.poke(f"kindcopy{i}", bytes(4), f"main+{smash_state.CARD_PADS + i * smash_state.CARD_PAD_SIZE + smash_state.CARD_COPY + smash_state.CARD_KIND:#x}")
+                            converted[i] = fig_cards[i] = nick
+                    if converted:
+                        kinds_until = f.index + KINDS_FOR
+                        log("+: " + ", ".join(f"card {i + 1} is {n}'s" for i, n in converted.items()))
                 elif count == 0 and f.index >= next_look:
                     next_look = f.index + LOOK_EVERY
-                    now = smash_state.cards(f)
-                    if card is not None and now.get(card, (None,))[0] != smash_state.HUMAN:
-                        card = None  # its card was closed or given back to a CPU
-                    cpu_mario = [i for i, c in now.items()
-                                 if c == (smash_state.CPU, smash_state.MARIO)]
-                    # A failed try waits for the cards to change.
-                    if cpu_mario and card is None and now != tried:
+                    now, owners = smash_state.cards(f), smash_state.card_owners(f)
+                    seated, ai_figs, waiting = {}, {}, set()
+                    for i, (kind, chara) in now.items():
+                        nick, pad = owners.get(i, ("", -1))
+                        if kind == smash_state.FIG and nick in fig_pads and nick not in seated:
+                            ai_figs[i] = seated[nick] = nick
+                        elif kind == smash_state.FIG and not nick:
+                            waiting.add(i)
+                        elif kind == smash_state.HUMAN and pad in pad_figs:
+                            seated[pad_figs[pad]] = i
+                    for i, nick in ai_figs.items():
+                        if fig_cards.get(i) != nick:
+                            log(f"card {i + 1} is {nick}'s, on controller {fig_pads[nick] + 1}")
+                            b.poke(f"pad{i}", fig_pads[nick].to_bytes(4, "little", signed=True),
+                                   f"main+{smash_state.CARD_PADS + i * smash_state.CARD_PAD_SIZE:#x}")
+                    for i in set(fig_cards) - set(ai_figs):
+                        b.unpoke(f"pad{i}")
+                        if now.get(i, (None,))[0] != smash_state.HUMAN:  # no longer an AI's card
+                            b.poke(f"pad{i}", (-1).to_bytes(4, "little", signed=True),
+                                   f"main+{smash_state.CARD_PADS + i * smash_state.CARD_PAD_SIZE:#x}")
+                            b.unpoke(f"pad{i}")
+                    fig_cards = ai_figs
+                    # A FIG card still waiting since the last look gets an AI not seated yet: its
+                    # virtual amiibo on the reader for one look, while Smash scans for it.
+                    free = [n for n in fig_pads if n not in seated]
+                    if placed:
+                        b.amiibo()
+                        placed = None
+                    elif waiting & waited and free and b.amiibo(f"{AMIIBO}/{free[0]}.bin"):
+                        placed = free[0]
+                        log(f"{placed}'s amiibo on the reader for card {min(waiting & waited) + 1}")
+                    waited = waiting
+                    # An AI's player card without its fighter: its hand picks Mario.
+                    lost = [(i, p) for i, (kind, chara) in now.items()
+                            for p in [owners.get(i, ("", -1))[1]]
+                            if kind == smash_state.HUMAN and p in pad_figs and chara != smash_state.MARIO]
+                    if lost and now != tried:
                         # Its presses anywhere but on the character select could open a menu.
                         shot = smash_farm.grab(b)
                         name, dist = smash_farm.screen(shot[0], refs) if shot else ("none", 0)
                         if name in ("css", "ready"):
-                            log(f"{a.name} takes the CPU Mario of card {cpu_mario[0] + 1}")
-                            before, card, tries = now, None, 0
-                            join_steps = JOIN + SETTLE
+                            log(f"{pad_figs[lost[0][1]]} picks Mario on card {lost[0][0] + 1}")
+                            picking, tries = lost[0], 0
+                            join_steps = pick_path(PICK_DOWNS[0]) + SETTLE
                         elif name != seen:
-                            log(f"screen {name} ({dist:.0f}): {a.name} waits for the character select")
+                            log(f"screen {name} ({dist:.0f}): the AIs wait for the character select")
                         seen = name
 
             if not a.auto:
@@ -334,6 +374,7 @@ def main():
             ours = pressed if f.index < next_press + PRESS_EVERY else 0
             touched = {i: hex(p[0]) for i, p in f.pads.items()
                        if p[0] & ~ours and i not in active and i != picker
+                       and i not in fig_pads.values()
                        and not (i in quiet and f.index < quiet_until)}
             if touched:
                 log(f"controller input from someone else {touched}, stopping")
@@ -415,7 +456,7 @@ def main():
             out.close()
             os.rename(path + ".part", path)
             log(f"partial match kept: {path}")
-        for i in {0, *agents, *([] if a.pad is None else [a.pad])}:
+        for i in {0, *agents, *fig_pads.values()}:
             b.release(i)
         if a.release_lock:
             subprocess.run([ADB, "shell", "rm", "-f", LOCK])

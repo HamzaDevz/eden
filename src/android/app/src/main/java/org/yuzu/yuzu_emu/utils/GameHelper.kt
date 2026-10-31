@@ -168,7 +168,18 @@ object GameHelper {
 
                 if (Game.extensions.contains(extension)) {
                     val game = getGame(it.uri, true, false)
-                    if (game != null) {
+                    val twin = game?.let { g ->
+                        gamesByProgramId[g.programId].takeIf { g.programId != "0" }
+                    }
+                    if (game != null && twin != null) {
+                        // The same game in two files, such as a cartridge image and a package
+                        // that also holds its update and DLC (mounted as content anyway): one
+                        // entry, the cartridge's
+                        if (extension == "xci") {
+                            games[games.indexOf(twin)] = game
+                            gamesByProgramId[game.programId] = game
+                        }
+                    } else if (game != null) {
                         games.add(game)
                         if (game.programId != "0") {
                             gamesByProgramId[game.programId] = game

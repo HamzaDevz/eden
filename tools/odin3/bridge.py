@@ -92,6 +92,10 @@ class Bridge:
     def release(self, player):
         self.send(f"release {player}")
 
+    def plug(self, player):
+        """Connects the controller of that player again."""
+        return self.ask(f"plug {player}", "ok").startswith("ok")
+
     def shot(self, height=360):
         got = self.ask(f"shot {height}", "shot")
         if got.startswith("err "):

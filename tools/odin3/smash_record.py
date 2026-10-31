@@ -178,6 +178,7 @@ def main():
     placed, placed_until = None, 0  # an amiibo put back on the reader
     kinds_until, converted = 0, []  # the FIG cards made player cards on a + press
     next_ok, ok_until = 0, 0  # the AIs' A on the results
+    next_plug = 0  # the next check of the AIs' controllers
     try:
         for line in b.frames(raw=True):
             f = Frame(line)
@@ -187,6 +188,13 @@ def main():
                 flags = (count, ready, result)
                 log(f"fighters {count} ready_go {ready} result {result}")
             fighting = count >= 2 and not result and f.watches.get("0pos") is not None
+            # Eden can unplug the AIs' controllers (a pad joining as player 1, a launch from the
+            # game list): they are plugged back in, else their fighters stand still.
+            if fig_pads and f.index >= next_plug:
+                for p in sorted(set(pad_figs) - set(f.pads)):
+                    log(f"{pad_figs[p]}'s controller {p + 1} plugged back in" if b.plug(p) else
+                        f"{pad_figs[p]}'s controller {p + 1} could not be plugged in")
+                next_plug = f.index + LOOK_EVERY
 
             fighters = smash_state.parse(f, a.players) if fighting else {}
             if out is None and fighters and len(fighters) == min(count, a.players):

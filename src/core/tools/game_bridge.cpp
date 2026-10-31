@@ -15,6 +15,7 @@
 //                                     buttons the low 16 npad bits (A to D-pad down, the same in
 //                                     TAS), sticks -32767..32767
 //   release <player>
+//   plug <player>                     connects that controller again -> ok plug
 //   amiibo <path|->                   puts the amiibo file on the virtual NFC reader of player 1
 //                                     while the game scans, or takes it off -> ok amiibo
 //   sync <k>                          lockstep, 0 to stop: each frame waits (1 s at most) until
@@ -324,6 +325,15 @@ private:
             if (player < NumPads) {
                 pads_set &= ~(1U << player);
             }
+        } else if (command == "plug" && args.size() == 2) {
+            const auto player = ParseU64(args[1]);
+            if (player >= NumPads) {
+                throw std::invalid_argument("player");
+            }
+            auto* controller = system.HIDCore().GetEmulatedControllerByIndex(player);
+            controller->Connect();
+            Settings::values.players.GetValue()[player].connected = controller->IsConnected();
+            Send(controller->IsConnected() ? "ok plug\n" : "err plug\n");
         } else if (command == "amiibo" && args.size() == 2) {
             const bool done = amiibo_sink && amiibo_sink(args[1] == "-" ? "" : args[1]);
             Send(done ? "ok amiibo\n" : "err amiibo\n");

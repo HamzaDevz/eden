@@ -20,7 +20,7 @@ its FIG card, puts its amiibo (ROOT\\k\\amiibo) and plays it with --pad 7, in th
 Each AI has its own brain: the instances play the one smash_rl.py names in HOME\\ai, its champion
 and candidate (see models()), and restart when it names the next.
 
-  smash_farm.py --instances 0 1 [--cpu 0] [--champion 0] [--figs Ultimus,...] [--every 5400]
+  smash_farm.py --instances 0 1 2 [--cpu 0] [--champion 0] [--figs Ultimus,...] [--every 5400]
                 [--idle 900]
 """
 import argparse
@@ -214,7 +214,7 @@ class Instance:
     def last_save(self):
         """Time of the last match this instance's recorder saved."""
         out = os.path.join(self.a.home, "rec" if self.cpu else "play")
-        name = f"*-{self.port}.txt.gz" if self.port != 6560 else "????????-??????.txt.gz"
+        name = f"*-{self.port}.txt.gz"  # the Odin's, synced here, have no port
         times = [os.path.getmtime(p) for p in glob.glob(os.path.join(out, name))]
         return max(times, default=0)
 
@@ -352,7 +352,7 @@ class Instance:
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--instances", type=int, nargs="+", default=[0, 1])
+    ap.add_argument("--instances", type=int, nargs="+", default=[0, 1, 2])
     ap.add_argument("--home", default=r"C:\Emulation\tools\smash-ai")
     ap.add_argument("--cpu", type=int, nargs="*", default=[],
                     help="instances where CPU plays against CPU, into HOME\\rec")

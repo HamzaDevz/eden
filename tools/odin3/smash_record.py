@@ -75,9 +75,14 @@ PICK = pick_path(13)
 # With --pad, a FIG card made by an AI's own hand comes back from the match as that controller's
 # player card, under someone's name tag: the hand turns it back into its FIG card, player then CPU
 # then FIG on its label. The path holds for the first of two cards: the hand to the bottom left
-# corner, then right onto the label.
-REFIG = ([(0, -32767, -32767)] * 120 + [(0, 32767, 0)] * 12 + [(0, 0, 0)] * 10
-         + ([(BUTTON_A, 0, 0)] * PRESS_FRAMES + [(0, 0, 0)] * 30) * 2 + [(0, 0, 0)] * 20)
+# corner, then right onto the label: twelve frames on the Odin, thirty on the PC's instances, so
+# the recorder tries each and keeps the one that worked.
+def refig(right):
+    return ([(0, -32767, -32767)] * 120 + [(0, 32767, 0)] * right + [(0, 0, 0)] * 10
+            + ([(BUTTON_A, 0, 0)] * PRESS_FRAMES + [(0, 0, 0)] * 30) * 2 + [(0, 0, 0)] * 20)
+
+
+REFIG_RIGHT = (12, 30)
 LOOK_EVERY = 60
 PLACED_FOR = 180  # frames an amiibo put back stays on the reader, for Smash to scan it
 AMIIBO = "/storage/emulated/0/Android/data/com.miHoYo.Yuanshen.relWithDebInfo/files/amiibo"
@@ -190,6 +195,7 @@ def main():
     pads = {}  # the controller playing each slot the agent plays
     join_steps, next_look, seen = [], 0, None  # with --pad: a REFIG in progress, the next look
     picking, tried = None, None  # (card, controller) of the REFIG, cards it gave up on
+    refig_at, refig_fails = 0, 0  # REFIG_RIGHT's path in use, its failures in a row
     fig_cards, last_ai = {}, {}  # AIs' FIG cards, the AI each card had
     placed, placed_until = None, 0  # an amiibo put back on the reader
     kinds_until, converted = 0, []  # the FIG cards made player cards on a + press
@@ -259,7 +265,7 @@ def main():
                                    "~/smash-ai/play" if active else "~/smash-ai/rec")
                 os.makedirs(os.path.expanduser(folder), exist_ok=True)
                 path = os.path.join(os.path.expanduser(folder), time.strftime("%Y%m%d-%H%M%S")
-                                    + (f"-{a.port}" if a.port != 6560 else "") + ".txt.gz")
+                                    + (f"-{a.port}" if a.port != 6560 or a.out else "") + ".txt.gz")
                 out = gzip.open(path + ".part", "wt", compresslevel=6)
                 header = {"title": info[1], "build": info[2], "players": a.players,
                           "manager": smash_state.FIGHTER_MANAGER, "layout": layout,
@@ -338,9 +344,13 @@ def main():
                         if now.get(card, (None,))[0] == smash_state.FIG:
                             log(f"card {card + 1} is {pad_figs[pad]}'s FIG card again")
                             last_ai[card] = pad_figs[pad]  # its amiibo goes back below
+                            refig_fails = 0
                         else:
-                            log(f"card {card + 1} stays a player card on {pad_figs[pad]}'s controller")
-                            tried = now
+                            log(f"card {card + 1} stays a player card on {pad_figs[pad]}'s controller "
+                                f"({REFIG_RIGHT[refig_at]} frames right)")
+                            refig_at, refig_fails = (refig_at + 1) % len(REFIG_RIGHT), refig_fails + 1
+                            if refig_fails >= len(REFIG_RIGHT):  # every path failed: until the cards change
+                                tried, refig_fails = now, 0
                         picking = None
                 elif kinds_until and f.index >= kinds_until:
                     for i in converted:
@@ -422,7 +432,7 @@ def main():
                         elif name in ("css", "ready"):
                             log(f"card 1 is a player card on {pad_figs[lost[0][1]]}'s controller: "
                                 "back to its FIG card")
-                            picking, join_steps = lost[0], list(REFIG)
+                            picking, join_steps = lost[0], refig(REFIG_RIGHT[refig_at])
                         elif name != seen:
                             log(f"screen {name} ({dist:.0f}): the AIs wait for the character select")
                         seen = name

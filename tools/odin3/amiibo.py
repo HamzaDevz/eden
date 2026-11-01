@@ -56,14 +56,15 @@ def xp_level(xp):
 
 
 def level(data):
-    """The level an AI's FIG shows: Smash's on its card, or after its name above Smash's 50 (shown_name())."""
+    """The level an AI's FIG shows after its name (shown_name()), else Smash's on its card."""
     nick = data[0x38:0x4c].decode("utf-16-be").split("\0")[0].rsplit(" ", 1)
     return int(nick[1]) if len(nick) == 2 and nick[1].isdigit() else xp_level(struct.unpack_from("<H", data, AREA + XP)[0])
 
 
 def shown_name(name, n):
-    """The nickname of an AI's FIG at level n: its name, followed by n once Smash's card stops at 50."""
-    return name[:10] if n <= 50 else f"{name[:9 - len(str(n))]} {n}"
+    """The nickname of an AI's FIG at level n: its name followed by n (Hamza, 1/11), which goes on
+    where Smash's card stops at 50."""
+    return f"{name[:9 - len(str(n))]} {n}"
 
 
 def named(nick, names):
@@ -77,7 +78,7 @@ def with_level(data, name, lv):
     has not written its game data there yet."""
     if struct.unpack_from(">I", data, 0xb6)[0] != SMASH:
         return data
-    n = max(round(lv), 1)
+    n = max(int(lv), 1)  # as Smash's card shows its experience
     i = min(max(int(lv), 1), len(LEVEL_XP)) - 1
     xp = round(LEVEL_XP[i] + (LEVEL_XP[min(i + 1, len(LEVEL_XP) - 1)] - LEVEL_XP[i]) * min(max(lv - 1 - i, 0), 1))
     d = bytearray(data)

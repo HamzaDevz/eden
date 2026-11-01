@@ -91,6 +91,17 @@ class Bridge:
     def unpoke(self, pid="*"):
         return self.ask(f"unpoke {pid}", "ok")
 
+    def read(self, address, length):
+        """length bytes of memory at address, None when some of it is not mapped."""
+        out = b""
+        while len(out) < length:
+            k = min(length - len(out), 0x10000)
+            got = self.ask(f"read {address + len(out):#x} {k:#x}", "mem").split()
+            if got[0] != "mem" or got[2] == "-":
+                return None
+            out += bytes.fromhex(got[2])
+        return out
+
     def amiibo(self, path=None):
         """Puts the amiibo file at path (on the console) on the NFC reader, or takes it off."""
         return self.ask(f"amiibo {path or '-'}", "ok").startswith("ok")

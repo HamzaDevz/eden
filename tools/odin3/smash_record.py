@@ -135,6 +135,9 @@ def main():
     ap.add_argument("--level", type=int, help="level of the CPU, kept in the match header")
     ap.add_argument("--level-file", help="CPU level to follow, read after each match: player 1 "
                     "then goes back through the character select to set it")
+    ap.add_argument("--tag", help="a person's name tag, renamed as the AIs' FIG cards with their "
+                    "level from --strength after it (Hamz 43)")
+    ap.add_argument("--strength", help="smash_rl.py's strength.json, the person's level as Hamza")
     a = ap.parse_args()
     # Started in the background, the process ignores SIGINT: both signals end it cleanly.
     def stop(*_):
@@ -183,6 +186,23 @@ def main():
     b.ask("stream 1", "ok")
     if a.sync:
         b.sync(a.sync)
+
+    def tag_level(seen):
+        """--tag followed by the person's level when --strength changed since seen, its mtime
+        then: its mtime now. The game writes the new name to its save after the next match."""
+        main = info[3].split("=")[1]
+        try:
+            mtime = os.path.getmtime(os.path.expanduser(a.strength))
+            if mtime == seen or main == "-":
+                return seen
+            with open(os.path.expanduser(a.strength)) as fh:
+                new = amiibo.shown_name(a.tag, max(int(json.load(fh)["Hamza"]), 1))
+        except (OSError, ValueError, KeyError):
+            return seen
+        done = smash_state.rename_tag(b, int(main, 16), a.tag, new)
+        log(f"name tag {a.tag} is now {new}" if done else f"name tag {a.tag} not in the save data")
+        return mtime
+    tag_seen = tag_level(0) if a.tag and a.strength else None
 
     out, path, frames, gaps, last, me = None, None, 0, 0, None, None
     matches, press_until, next_press, pressed, flags = 0, 0, -PRESS_EVERY, 0, None
@@ -301,6 +321,8 @@ def main():
                         + ", ".join(f"p{i} kind {x.kind:#x} stock {x.stock}" for i, x in fighters.items()))
                     if any([ag.reload() for ag in agents.values()]):
                         log("model reloaded")
+                    if tag_seen is not None:
+                        tag_seen = tag_level(tag_seen)
                     if agents and not a.selfplay and phase() == "selfplay":
                         log(f"{a.name} beats the CPU: make the CPU a player and restart with --selfplay")
                         return

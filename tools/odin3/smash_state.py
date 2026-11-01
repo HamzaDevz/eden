@@ -31,6 +31,10 @@ HUMAN, CPU, FIG, NO_CARD = 0, 1, 2, 3
 CARD_PADS, CARD_PAD_SIZE, CARD_COPY = 0x53095b0, 0x240, 0x88
 MARIO = 0x0edaf3c863  # hash40("ui_chara_mario")
 ENTRY_PAD = 0x10  # s32 controller of a FighterEntry, -1 for a CPU or a FIG
+# The save data the game works on and writes to system_data.bin, at [[main+0x5314508]] (a second
+# copy has no fixed path): a name tag there is a u32 count of characters, then its name in UTF-16
+# and a 0 (10 characters at most, in 0x18 bytes that may keep an older name's after the 0).
+SAVE = 0x5314508
 
 ACC = (0x4160, 0x20)  # current fighter, then its BattleObjectModuleAccessor
 
@@ -126,6 +130,28 @@ def names(frame, players):
         raw = frame.watches.get(f"{i}tag")
         out[i] = raw.decode("utf-16-le", "replace").split("\0")[0] if raw else ""
     return out
+
+
+def rename_tag(bridge, main, tag, new):
+    """Names new the name tag tag, or tag followed by a number (an earlier call), in the save data:
+    the offsets of the tags it renamed. main is the base of the main module ("info")."""
+    holder = bridge.read(main + SAVE, 8)
+    save = holder and bridge.read(int.from_bytes(holder, "little"), 8)
+    data = save and bridge.read(int.from_bytes(save, "little"), 0x40000)
+    done, key = [], tag.encode("utf-16-le")
+    at = data.find(key) if data else -1
+    while at >= 4:
+        count = int.from_bytes(data[at - 4:at], "little")
+        name = data[at:at + count * 2].decode("utf-16-le", "replace") if count <= 10 else ""
+        after = name[len(tag):]
+        if name.startswith(tag) and (not after or after[0] == " " and after[1:].isdigit()) \
+                and data[at + count * 2:at + count * 2 + 2] == b"\0\0":
+            name16 = struct.pack("<I", len(new)) + (new[:10] + "\0").encode("utf-16-le")
+            bridge.poke("tag", name16, f"main+{SAVE:#x}", 0, at - 4)
+            bridge.unpoke("tag")
+            done.append(at - 4)
+        at = data.find(key, at + 1)
+    return done
 
 
 def parse(frame, players):

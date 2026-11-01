@@ -59,6 +59,10 @@ FIELDS = {
 # +0xdc (total_beat_count).
 KOS = (0x60, (0xf8, 0xdc))
 TEAM = (4, (*ACC, 0xd8, 0x10))  # TeamModule: team number, each fighter's own outside team battles
+# The DamageLog of the DamageModule (damage_log() adds 0x80), the last hit taken: s32 object_id_ of
+# what dealt it, then owner_object_id_ (the fighter of a projectile), named by its table's keys.
+HIT_BY = (8, (*ACC, 0xa8, 0x100))
+TEAM_BATTLE = 0x52c51e8  # byte, 1 with team battles in the rules, on the character select too
 
 # WorkModule arrays (table 0 instance, 1 status): floats, ints (8-byte stride), flag words.
 WORK = {
@@ -102,6 +106,8 @@ def watch_all(bridge, players, work=False):
         bridge.ask(f"watch {i}kos {KOS[0]:#x} {FIGHTER_MANAGER} {chain}", "ok")
         chain = " ".join(f"{o:#x}" for o in (0, 0x20 + i * 8, *TEAM[1]))
         bridge.ask(f"watch {i}team {TEAM[0]:#x} {FIGHTER_MANAGER} {chain}", "ok")
+        chain = " ".join(f"{o:#x}" for o in (0, 0x20 + i * 8, *HIT_BY[1]))
+        bridge.ask(f"watch {i}hitby {HIT_BY[0]:#x} {FIGHTER_MANAGER} {chain}", "ok")
         bridge.ask(f"watch {i}tag 0x14 main+{PLAYERS + i * PLAYER_SIZE + NAME:#x}", "ok")
 
 
@@ -162,6 +168,21 @@ def kos(frame, players):
     return out
 
 
+
+def damage(frame, players):
+    """{fighter: (damage, fighter that dealt its last hit or None)} of the fighters that read it."""
+    ids, out = {}, {}
+    for i in range(players):
+        raw = frame.watches.get(f"{i}id")
+        if raw and len(raw) >= 4:
+            ids[int.from_bytes(raw[:4], "little")] = i
+    for i in range(players):
+        hurt, hit = frame.watches.get(f"{i}dmg"), frame.watches.get(f"{i}hitby")
+        if hurt and len(hurt) == 4 and hit and len(hit) == HIT_BY[0]:
+            obj, owner = struct.unpack("<2I", hit)
+            out[i] = struct.unpack("<f", hurt)[0], ids.get(obj, ids.get(owner))
+    return out
+
 def tag_name(bridge, main, record):
     """The name of that name tag record in the save data, "" for none. main is the base of the
     main module ("info")."""
@@ -185,7 +206,7 @@ def rename_tag(bridge, main, tag, new):
         count = int.from_bytes(data[:4], "little")
         name = data[4:4 + count * 2].decode("utf-16-le", "replace") if 0 < count <= 10 else ""
         after = name[len(tag):]
-        if name.startswith(tag) and (not after or after[0] == " " and after[1:].lstrip("-").isdigit()):
+        if name.startswith(tag) and (not after or after[0] == " " and after[1:].lstrip("-").removesuffix("k").isdigit()):
             name16 = struct.pack("<I", len(new)) + (new[:10] + "\0").encode("utf-16-le")
             bridge.poke("tag", name16, f"main+{SAVE:#x}", 0, TAGS + record * TAG_SIZE)
             bridge.unpoke("tag")

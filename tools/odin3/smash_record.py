@@ -129,19 +129,41 @@ def badge_place(rank, n):
     of n open cards."""
     w = CARDS_RIGHT / n
     size = round(min(max(w * 0.3, 45), 80))
-    return round(w * (rank + 0.82)), round(CARDS_TOP + size * 16 / 9 * 0.55), size
+    return round(w * rank + min(w * 0.7, w - size * 0.95)), round(CARDS_TOP + size * 16 / 9 * 0.55), size
 
 
 def base(nick):
-    """A FIG nickname or name tag without the level after it (amiibo.shown_name())."""
+    """A FIG nickname or name tag without the level or points after it (amiibo.shown_name(),
+    short_points())."""
     head, _, tail = nick.rpartition(" ")
-    return head if head and tail.lstrip("-").isdigit() else nick
+    return head if head and tail.lstrip("-").removesuffix("k").isdigit() else nick
+
+
+def short_points(n):
+    """Smash points as a name tag shows them after its name, in thousands: 1012k."""
+    return f"{n // 1000}k"
+
+
+# Smash points (Points), as Smash's own GSP: everyone starts at 1,000,000 and never goes under 0.
+# A KO between two fighters of the same points is worth half of KO_POINTS, more against a stronger
+# one and less against a weaker one, as in Elo (which GSP is said to follow, ssbwiki.com/GSP):
+# SPREAD points apart, the stronger is expected to score 10 KOs for 1.
+START, KO_POINTS, SPREAD = 1_000_000, 20_000, 400_000
+DAMAGE_POINTS = 100  # in a free-for-all, for each % dealt to someone of the same points
+MODES = {"1v1": "1v1", "teams": "EQUIPES", "ffa": "FFA"}  # Points' modes and their badge labels
+
+
+def mode_of(fighters, teams=False):
+    """Which of MODES a match of that many fighters is, teams with team battles on."""
+    return "1v1" if fighters == 2 else "teams" if teams else "ffa"
 
 
 class Points:
-    """--points: everyone's Smash points by name, an AI's or a name tag's, as timed battles count
-    them: in a match with a person's name tag and someone else named, +1 for each KO on another
-    named fighter of another team and -1 for each fall. The file is written at every change."""
+    """--points: everyone's Smash points by name and mode (MODES), an AI's or a name tag's, worked
+    out at the end of each match with a person's name tag and someone else named. 1 on 1 and in
+    teams, each KO on a named fighter of another team is won from them and each fall costs (half
+    of KO_POINTS for a fall to no one named: a CPU, a teammate, the fighter itself); in a
+    free-for-all, the KOs and the damage dealt to named fighters only add."""
 
     def __init__(self, path, ais):
         self.path = os.path.expanduser(path)
@@ -150,16 +172,24 @@ class Points:
                 self.points = json.load(fh)
         except (OSError, ValueError):
             self.points = {}
-        for name in ais:  # their FIG cards show 10 characters of their names
-            self.points.setdefault(name, 0)
-        self.names, self.people, self.seen = {}, {}, {}
+        if any(m not in MODES for m in self.points):  # the KO counts kept before, set aside
+            os.replace(self.path, self.path + ".kos")
+            self.points = {}
+        for mode in MODES:
+            self.points.setdefault(mode, {})
+        self.ais = list(ais)
+        self.names, self.people, self.last, self.dealt, self.damage = {}, {}, {}, {}, {}
+
+    def of(self, mode, name):
+        return self.points[mode].get(name, START)
 
     def key(self, name):
         """The name the points of a FIG nickname or name tag are kept under: without the number
         after it, or the longer name it was cut from (amiibo.shown_name())."""
         head = base(name)
-        return head if head in self.points or len(head) < 5 else next(
-            (n for n in self.points if n.startswith(head)), head)
+        known = {n for table in self.points.values() for n in table} | set(self.ais)
+        return head if head in known or len(head) < 5 else next(
+            (n for n in known if n.startswith(head)), head)
 
     def start(self, ais, tags):
         """A match of ais and people's tags ({fighter: name}): counted with one of each at least,
@@ -167,33 +197,64 @@ class Points:
         names = {i: self.key(n) for i, n in {**tags, **ais}.items() if n}
         self.people = {names[i]: base(n) for i, n in tags.items() if n and i not in ais}
         self.names = names if self.people and len(names) > 1 else {}
-        self.seen = {}
+        self.last, self.dealt, self.damage = {}, {}, {}
 
     def update(self, f, players):
-        changes = {}
-        now = smash_state.kos(f, players) if self.names else {}
+        """Follows a counted match frame by frame: its KOs, and who dealt each fighter's damage."""
+        if not self.names:
+            return
+        now = smash_state.kos(f, players)
+        if now:
+            self.last = now
+        for j, (hurt, by) in smash_state.damage(f, players).items():
+            was, self.damage[j] = self.damage.get(j), hurt
+            if was is not None and hurt > was and by in now and by != j:
+                self.dealt[by, j] = self.dealt.get((by, j), 0) + hurt - was
+
+    def finish(self):
+        """The points of the match start() began, from its last KOs and damage: {name: (points,
+        change)}, saved."""
+        names, now, self.names = self.names, self.last, {}
+        if not names or len(now) < 2:
+            return {}
+        teams = [team for _, _, team in now.values()]
+        mode = mode_of(len(now), len(set(teams)) < len(teams))
+        had = {n: self.of(mode, n) for n in names.values()}
+
+        def worth(i, j):  # i's KO on j
+            return KO_POINTS / (1 + 10 ** ((had[names[i]] - had[names[j]]) / SPREAD))
+
+        change = dict.fromkeys(had, 0.0)
         for i, (falls, beat, team) in now.items():
-            was, self.seen[i] = self.seen.get(i), (falls, beat)
-            if was is None:
-                continue
-            if i in self.names and falls > was[0]:
-                changes[self.names[i]] = changes.get(self.names[i], 0) - (falls - was[0])
-            for j, n in beat.items():  # nothing for a KO on a teammate, which still costs them a fall
-                if n > was[1][j] and i in self.names and j in self.names and j in now and now[j][2] != team:
-                    changes[self.names[i]] = changes.get(self.names[i], 0) + n - was[1][j]
-        if changes:
-            for name, d in changes.items():
-                self.points[name] = self.points.get(name, 0) + d
-            with open(self.path + ".tmp", "w") as fh:
-                json.dump(self.points, fh)
-            os.replace(self.path + ".tmp", self.path)
-            log("points: " + ", ".join(f"{n} {self.points[n]} ({d:+d})" for n, d in changes.items()))
+            won = {j: n for j, n in beat.items() if n and i in names and j in names and j in now and now[j][2] != team}
+            for j, n in won.items():
+                change[names[i]] += n * worth(i, j)
+                if mode != "ffa":
+                    change[names[j]] -= n * worth(i, j)
+            if mode != "ffa" and i in names:
+                lost = sum(now[k][1].get(i, 0) for k in now if k in names and now[k][2] != team)
+                change[names[i]] -= max(falls - lost, 0) * KO_POINTS / 2
+        if mode == "ffa":
+            for (i, j), hurt in self.dealt.items():
+                if i in names and j in names:
+                    change[names[i]] += hurt * DAMAGE_POINTS * worth(i, j) / (KO_POINTS / 2)
+        out = {}
+        for name, d in change.items():
+            new = max(round(had[name] + d), 0)
+            self.points[mode][name] = new
+            out[name] = new, new - had[name]
+        with open(self.path + ".tmp", "w") as fh:
+            json.dump(self.points, fh)
+        os.replace(self.path + ".tmp", self.path)
+        log(f"points {mode}: " + ", ".join(f"{n} {p:,} ({d:+,})" for n, (p, d) in out.items()))
+        return out
 
 
 class Badges:
-    """--badges: on the character select, Eden draws the Smash points (Points) over each card that
-    has a name, an AI's FIG card by its nickname and a player card by its name tag, popping with
-    what they won or lost since they were last shown there (the file keeps those)."""
+    """--badges: on the character select, Eden draws the Smash points (Points) of the mode its
+    rules make over each card that has a name, an AI's FIG card by its nickname and a player card
+    by its name tag, popping with what they won or lost since they were last shown there (the
+    file keeps those)."""
 
     def __init__(self, path, points):
         self.path, self.points, self.sent = os.path.expanduser(path), points, set()
@@ -204,26 +265,29 @@ class Badges:
             self.shown = {}
 
     def wanted(self, b, main, f):
-        """{card: (name, points)} of the cards that get a badge, main being the main module's base."""
-        owners, tags, out = smash_state.card_owners(f), smash_state.card_tags(f), {}
-        for i, (kind, _) in smash_state.cards(f).items():
+        """{card: (mode, name, points)} of the cards that get a badge, main being the main
+        module's base."""
+        owners, tags, cards, out = smash_state.card_owners(f), smash_state.card_tags(f), smash_state.cards(f), {}
+        mode = mode_of(len(cards), (b.read(main + smash_state.TEAM_BATTLE, 1) or b"\0")[0] == 1)
+        for i, (kind, _) in cards.items():
             who = owners.get(i, ("",))[0] if kind == smash_state.FIG else \
                 smash_state.tag_name(b, main, tags.get(i, -1)) if kind == smash_state.HUMAN else ""
             if who:
                 name = self.points.key(who)
-                out[i] = name, self.points.points.get(name, 0)
+                out[i] = mode, name, self.points.of(mode, name)
         return out
 
     def show(self, b, f, wanted=None):
         """Sends the badges of wanted (wanted()), or takes them all off without it."""
         cards = sorted(smash_state.cards(f))
-        for i, (name, lv) in (wanted or {}).items():
-            gain = lv - self.shown.get(name, lv)
-            b.badge(i, *badge_place(cards.index(i), len(cards)), lv, gain)
-            if self.shown.get(name) != lv:
+        for i, (mode, name, n) in (wanted or {}).items():
+            key = f"{mode} {name}"
+            gain = n - self.shown.get(key, n)
+            b.badge(i, *badge_place(cards.index(i), len(cards)), n, gain, MODES[mode])
+            if self.shown.get(key) != n:
                 if gain:
-                    log(f"{name}'s card shows {lv} points ({gain:+d})")
-                self.shown[name] = lv
+                    log(f"{name}'s card shows {n:,} points in {mode} ({gain:+,})")
+                self.shown[key] = n
                 with open(self.path + ".tmp", "w") as fh:
                     json.dump(self.shown, fh)
                 os.replace(self.path + ".tmp", self.path)
@@ -474,8 +538,9 @@ def main():
                         log("model reloaded")
                     if tag_seen is not None:
                         tag_seen = tag_level(tag_seen)
-                    for name, tag in (points.people if points and points.names else {}).items():
-                        new = amiibo.shown_name(name, points.points.get(name, 0))
+                    people, scored = (points.people, points.finish()) if points else ({}, {})
+                    for name, tag in people.items() if scored else ():
+                        new = amiibo.shown_name(name, short_points(scored[name][0]))
                         if smash_state.rename_tag(b, int(info[3].split("=")[1], 16), tag, new):
                             log(f"name tag {tag} is now {new}")
                     if agents and not a.selfplay and phase() == "selfplay":

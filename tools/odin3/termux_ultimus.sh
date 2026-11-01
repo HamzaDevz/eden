@@ -11,8 +11,9 @@ while true; do
     # With ~/smash-ai/train (the Odin left to them), they also start each match and pass the
     # results; a press on someone else's controller stops that and gives the Odin back (the
     # recorder removes ~/smash-ai/train and quits a match it started). Everyone's Smash points
-    # (+1 a KO, -1 a fall, against people) are kept by name, shown after each person's name tag
-    # and drawn by Eden over each card on the character select.
+    # (from 1,000,000 per mode as Smash's GSP, worked out after each match against people) are
+    # kept by name, shown after each person's name tag and drawn by Eden over each card on the
+    # character select.
     python smash_record.py --players 8 --pad 7 --figs Ultimus,Optimus,Nostradamus,Magnus \
       --agent ~/smash-ai/models/ultimus.npz --sparring --min-battery 0 --sync 1 \
       --points ~/smash-ai/points.json --badges ~/smash-ai/badges-points.json \

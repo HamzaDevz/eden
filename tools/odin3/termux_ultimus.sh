@@ -15,7 +15,7 @@ while true; do
     # and Eden draws each one's level over its card on the character select.
     python smash_record.py --players 8 --pad 7 --figs Ultimus,Optimus,Nostradamus,Magnus \
       --agent ~/smash-ai/models/ultimus.npz --sparring --min-battery 0 --sync 1 \
-      --tag Hamz --strength ~/smash-ai/strength.json --badges ~/smash-ai/badges.json \
+      --tag Hamz,Bare --strength ~/smash-ai/strength.json --badges ~/smash-ai/badges.json \
       $([ -e ~/smash-ai/train ] && echo --auto) >> ~/smash-ai/ultimus.log 2>&1
   fi
   sleep 30

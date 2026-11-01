@@ -96,6 +96,7 @@ LOOK_EVERY = 60
 PLACED_FOR = 180  # frames an amiibo put back stays on the reader, for Smash to scan it
 AMIIBO = "/storage/emulated/0/Android/data/com.miHoYo.Yuanshen.relWithDebInfo/files/amiibo"
 KINDS_FOR = 600  # frames the FIG cards stay player cards after a + that started no match
+BACK_FOR = 3600  # frames the AIs' cards stay FIG cards after a match without the character select seen
 
 
 def log(*args):
@@ -142,8 +143,9 @@ class Badges:
     has one, an AI's FIG card by its nickname and a player card by its name tag, popping with what
     it gained since it was last shown there (the file keeps those levels)."""
 
-    def __init__(self, path, strength):
+    def __init__(self, path, strength, tags=()):
         self.path, self.strength = os.path.expanduser(path), os.path.expanduser(strength)
+        self.tags = set(tags)  # the person's name tags (--tag), with Hamza's level
         self.levels, self.mtime, self.sent = {}, 0, set()
         try:
             with open(self.path) as fh:
@@ -154,6 +156,8 @@ class Badges:
     def named(self, nick):
         """The one with a level in --strength whose FIG or name tag shows nick, else None."""
         head = base(nick)
+        if head in self.tags and "Hamza" in self.levels:
+            return "Hamza"
         return next((n for n in self.levels if len(head) >= 4 and n.startswith(head)), None)
 
     def wanted(self, b, main, f):
@@ -214,8 +218,8 @@ def main():
     ap.add_argument("--level", type=int, help="level of the CPU, kept in the match header")
     ap.add_argument("--level-file", help="CPU level to follow, read after each match: player 1 "
                     "then goes back through the character select to set it")
-    ap.add_argument("--tag", help="a person's name tag, renamed as the AIs' FIG cards with their "
-                    "level from --strength after it (Hamz 43)")
+    ap.add_argument("--tag", help="a person's name tags, comma separated, renamed as the AIs' FIG "
+                    "cards with their level from --strength after it (Hamz 43)")
     ap.add_argument("--strength", help="smash_rl.py's strength.json, the person's level as Hamza")
     ap.add_argument("--badges", help="with --pad and --strength, Eden draws each card's level over "
                     "it on the character select (Badges); this file keeps what it needs")
@@ -269,7 +273,7 @@ def main():
         b.sync(a.sync)
 
     def tag_level(seen):
-        """--tag followed by the person's level when --strength changed since seen, its mtime
+        """Each --tag followed by the person's level when --strength changed since seen, its mtime
         then: its mtime now. The game writes the new name to its save after the next match."""
         main = info[3].split("=")[1]
         try:
@@ -277,14 +281,16 @@ def main():
             if mtime == seen or main == "-":
                 return seen
             with open(os.path.expanduser(a.strength)) as fh:
-                new = amiibo.shown_name(a.tag, max(int(json.load(fh)["Hamza"]), 1))
+                lv = max(int(json.load(fh)["Hamza"]), 1)
         except (OSError, ValueError, KeyError):
             return seen
-        done = smash_state.rename_tag(b, int(main, 16), a.tag, new)
-        log(f"name tag {a.tag} is now {new}" if done else f"name tag {a.tag} not in the save data")
+        for tag in a.tag.split(","):
+            new = amiibo.shown_name(tag, lv)
+            done = smash_state.rename_tag(b, int(main, 16), tag, new)
+            log(f"name tag {tag} is now {new}" if done else f"name tag {tag} not in the save data")
         return mtime
     tag_seen = tag_level(0) if a.tag and a.strength else None
-    badges = Badges(a.badges, a.strength) if a.badges and a.strength and a.pad is not None else None
+    badges = Badges(a.badges, a.strength, (a.tag or "").split(",")) if a.badges and a.strength and a.pad is not None else None
 
     out, path, frames, gaps, last, me = None, None, 0, 0, None, None
     matches, press_until, next_press, pressed, flags = 0, 0, -PRESS_EVERY, 0, None
@@ -301,6 +307,7 @@ def main():
     fig_cards, last_ai = {}, {}  # AIs' FIG cards, the AI each card had
     placed, placed_until = None, 0  # an amiibo put back on the reader
     kinds_until, converted = 0, []  # the FIG cards made player cards on a + press
+    figs_back, back_until = [], 0  # the AIs' cards made FIG cards again after a match
     next_ok, ok_until = 0, 0  # the AIs' A on the results
     next_plug = 0  # the next check of the AIs' controllers
     quit_until, quit_steps, quit_pad, quit_check = 0, [], None, 0  # QUIT wanted, in progress
@@ -349,9 +356,9 @@ def main():
                 if a.agent and a.pad is None and me is None:  # a match to learn nothing from
                     log(f"no player named {a.name}, stopping")
                     return
-                if kinds_until or fig_cards:
+                if kinds_until or fig_cards or figs_back:
                     b.unpoke("*")
-                    fig_cards, kinds_until = {}, 0
+                    fig_cards, kinds_until, figs_back = {}, 0, []
                 active = {i: agent(i, name) for i, name in figs.items()}
                 if me is not None and not figs:
                     for i, x in fighters.items():
@@ -404,6 +411,18 @@ def main():
                     log(f"saved {frames} frames, {gaps} gaps, "
                         + f"stage {int.from_bytes(stage, 'little') if stage else '-'}, "
                         + ", ".join(f"p{i} kind {x.kind:#x} stock {x.stock}" for i, x in fighters.items()))
+                    # The AIs' cards would come back as player cards on their controllers: FIG
+                    # cards again, which the character select builds them as.
+                    owners = card_owners(f)
+                    figs_back = [i for i, (kind, _) in smash_state.cards(f).items()
+                                 for nick, p in [owners.get(i, ("", -1))]
+                                 if kind == smash_state.HUMAN and p in pad_figs and nick == pad_figs[p]]
+                    for i in figs_back:
+                        b.poke(f"kind{i}", smash_state.FIG.to_bytes(4, "little"), f"main+{smash_state.CARDS + i * smash_state.CARD_SIZE + smash_state.CARD_KIND:#x}")
+                        b.poke(f"kindcopy{i}", smash_state.FIG.to_bytes(4, "little"), f"main+{smash_state.CARD_PADS + i * smash_state.CARD_PAD_SIZE + smash_state.CARD_COPY + smash_state.CARD_KIND:#x}")
+                    if figs_back:
+                        back_until = f.index + BACK_FOR
+                        log("back to FIG cards: " + ", ".join(f"card {i + 1}" for i in figs_back))
                     if any([ag.reload() for ag in agents.values()]):
                         log("model reloaded")
                     if tag_seen is not None:
@@ -480,7 +499,7 @@ def main():
                         b.unpoke(f"kind{i}")
                         b.unpoke(f"kindcopy{i}")
                     kinds_until = 0
-                elif count == 0 and not kinds_until and any(
+                elif count == 0 and not kinds_until and not figs_back and any(
                         p[0] & (BUTTON_PLUS | BUTTON_A) for k, p in f.pads.items()
                         if k not in pad_figs or a.auto):  # --auto presses on the first AI's
                     # The match takes the kind and controller from both tables when it starts:
@@ -502,6 +521,16 @@ def main():
                     if converted:
                         kinds_until = f.index + KINDS_FOR
                         log("+: " + ", ".join(f"card {i + 1} is {n}'s" for i, n in converted.items()))
+                elif count == 0 and figs_back and f.index >= next_look:
+                    # Let go once the character select shows them: it writes the kinds itself.
+                    next_look = f.index + LOOK_EVERY
+                    shot = smash_farm.grab(b)
+                    if f.index >= back_until or shot and smash_farm.screen(shot[0], refs)[0] in ("css", "ready"):
+                        for i in figs_back:
+                            b.unpoke(f"kind{i}")
+                            b.unpoke(f"kindcopy{i}")
+                        log("FIG cards let go on the character select")
+                        figs_back = []
                 elif count == 0 and f.index >= next_look:
                     next_look = f.index + LOOK_EVERY
                     now, owners = smash_state.cards(f), card_owners(f)

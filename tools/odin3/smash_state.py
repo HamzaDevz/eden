@@ -152,23 +152,22 @@ def tag_name(bridge, main, record):
 
 def rename_tag(bridge, main, tag, new):
     """Names new the name tag tag, or tag followed by a number (an earlier call), in the save data:
-    the offsets of the tags it renamed. main is the base of the main module ("info")."""
+    the records it renamed. main is the base of the main module ("info")."""
     holder = bridge.read(main + SAVE, 8)
     save = holder and bridge.read(int.from_bytes(holder, "little"), 8)
-    data = save and bridge.read(int.from_bytes(save, "little"), 0x40000)
-    done, key = [], tag.encode("utf-16-le")
-    at = data.find(key) if data else -1
-    while at >= 4:
-        count = int.from_bytes(data[at - 4:at], "little")
-        name = data[at:at + count * 2].decode("utf-16-le", "replace") if count <= 10 else ""
+    done = []
+    for record in range(64) if save else ():
+        data = bridge.read(int.from_bytes(save, "little") + TAGS + record * TAG_SIZE, 0x18)
+        if not data:
+            break
+        count = int.from_bytes(data[:4], "little")
+        name = data[4:4 + count * 2].decode("utf-16-le", "replace") if 0 < count <= 10 else ""
         after = name[len(tag):]
-        if name.startswith(tag) and (not after or after[0] == " " and after[1:].isdigit()) \
-                and data[at + count * 2:at + count * 2 + 2] == b"\0\0":
+        if name.startswith(tag) and (not after or after[0] == " " and after[1:].isdigit()):
             name16 = struct.pack("<I", len(new)) + (new[:10] + "\0").encode("utf-16-le")
-            bridge.poke("tag", name16, f"main+{SAVE:#x}", 0, at - 4)
+            bridge.poke("tag", name16, f"main+{SAVE:#x}", 0, TAGS + record * TAG_SIZE)
             bridge.unpoke("tag")
-            done.append(at - 4)
-        at = data.find(key, at + 1)
+            done.append(record)
     return done
 
 

@@ -133,15 +133,9 @@ def badge_place(rank, n):
 
 
 def base(nick):
-    """A FIG nickname or name tag without the level or points after it (amiibo.shown_name(),
-    short_points())."""
+    """A FIG nickname or name tag without the level or points shown after it before."""
     head, _, tail = nick.rpartition(" ")
     return head if head and tail.lstrip("-").removesuffix("k").isdigit() else nick
-
-
-def short_points(n):
-    """Smash points as a name tag shows them after its name, in thousands: 1012k."""
-    return f"{n // 1000}k"
 
 
 # Smash points (Points), as Smash's own GSP: everyone starts at 1,000,000 and never goes under 0.
@@ -538,11 +532,11 @@ def main():
                         log("model reloaded")
                     if tag_seen is not None:
                         tag_seen = tag_level(tag_seen)
-                    people, scored = (points.people, points.finish()) if points else ({}, {})
-                    for name, tag in people.items() if scored else ():
-                        new = amiibo.shown_name(name, short_points(scored[name][0]))
-                        if smash_state.rename_tag(b, int(info[3].split("=")[1], 16), tag, new):
-                            log(f"name tag {tag} is now {new}")
+                    if points:  # the points go on the badges only: the tags keep the bare names
+                        points.finish()
+                        for name, tag in points.people.items():
+                            if smash_state.rename_tag(b, int(info[3].split("=")[1], 16), tag, name):
+                                log(f"name tag {tag} is now {name}")
                     if agents and not a.selfplay and phase() == "selfplay":
                         log(f"{a.name} beats the CPU: make the CPU a player and restart with --selfplay")
                         return

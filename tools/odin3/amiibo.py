@@ -84,7 +84,7 @@ def with_level(data, name, lv):
     d = bytearray(data)
     struct.pack_into("<HH", d, AREA + XP, xp, min(xp, CPU_XP[-1]))
     struct.pack_into("<I", d, AREA, zlib.crc32(d[AREA + 4:AREA + 0xd8], 0xffffffff))
-    d[0x38:0x4c] = shown_name(name, n).ljust(10, "\0").encode("utf-16-be")
+    d[0x38:0x4c] = name[:10].ljust(10, "\0").encode("utf-16-be")  # the bare name (Hamza, 1/11)
     # Smash keeps a figure's data and nickname for the session by its UID, which Eden takes from a
     # plain file's first 7 bytes: the internal number (never checked) bumped makes each change another figure.
     if d != data:

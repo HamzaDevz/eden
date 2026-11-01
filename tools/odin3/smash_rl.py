@@ -293,6 +293,7 @@ def loop(a):
                 f.write(ai + "\n")
             log(f"{ai}'s turn")
 
+    waiting = None
     while True:
         try:
             # Each AI has its brain, trained on its own matches: one turn each, a candidate measured.
@@ -339,6 +340,9 @@ def loop(a):
                 name_next(ais[turn % len(ais)])
                 train_apart(a)
                 continue
+            if (current, len(mine), len(theirs)) != waiting:  # rl.log moves while the matches come in
+                waiting = current, len(mine), len(theirs)
+                log(f"{a.ai} {current}: {len(mine)} of {a.trial} matches measured, champion {len(theirs)}")
             time.sleep(60)
         except MemoryError:  # other work on the PC took it all: wait for it to finish
             log("out of memory, next turn in 5 min")

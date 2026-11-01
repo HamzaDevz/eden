@@ -358,7 +358,7 @@ def main():
                     help="instances where CPU plays against CPU, into HOME\\rec")
     ap.add_argument("--champion", type=int, nargs="*", default=[0],
                     help="instances where Ultimus plays the champion instead of the candidate")
-    ap.add_argument("--figs", help="the AIs play their FIG cards as on the Odin (Ultimus,...), "
+    ap.add_argument("--figs", default="Ultimus,Optimus,Nostradamus,Magnus", help="the AIs play their FIG cards as on the Odin (Ultimus,...), "
                     "from ROOT\\k\\amiibo")
     ap.add_argument("--every", type=int, default=1800, help="restart after this many seconds")
     ap.add_argument("--idle", type=int, default=900, help="restart when nothing was saved for this long")

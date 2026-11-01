@@ -22,6 +22,7 @@ than the value head expected, weighted by exp(advantage / beta).
 """
 import argparse
 import collections
+import glob
 import gzip
 import json
 import os
@@ -34,6 +35,7 @@ import numpy as np
 import torch
 from torch import nn
 
+import amiibo
 import smash_bc
 import smash_dataset
 import smash_farm
@@ -198,6 +200,34 @@ def current_level():
     return int(open(path).read()) if os.path.exists(path) else 1
 
 
+def strength(res, level):
+    """How strong an AI is, as the CPU level it would beat half the time, from its last 100 matches
+    measured at this level: level - 1 when it wins none of them, level at half, level + 1 at all."""
+    won = [m.won for m in res][-100:]
+    return round(level - 1 + 2 * sum(won) / len(won), 2) if len(won) >= 20 else None
+
+
+def show_strength(res, level, ais):
+    """Each AI's strength as its FIG's level in Smash: in its amiibo on every instance here, and in
+    HOME/strength.json, which pcsync.sh and ultimus.sh carry to the Odin's (amiibo.with_strength())."""
+    s = {ai: strength([m for m in res if m.name == ai and m.level == level and m.measured], level) for ai in ais}
+    s = {ai: v for ai, v in s.items() if v is not None}
+    with open(os.path.join(HOME, "strength.json.tmp"), "w") as f:
+        json.dump(s, f)
+    os.replace(os.path.join(HOME, "strength.json.tmp"), os.path.join(HOME, "strength.json"))
+    for ai, cpu in s.items():
+        shown = set()
+        for path in glob.glob(os.path.join(smash_farm.ROOT, "*", "amiibo", f"{ai}.bin")):
+            try:
+                levels = amiibo.set_strength(path, cpu)
+            except OSError:  # Eden reading it: next time
+                continue
+            if levels and levels[0] != levels[1]:
+                shown.add(levels[1])
+        if shown:
+            log(f"{ai}'s FIG: level {max(shown)}, as strong as a CPU {cpu}")
+
+
 def train(a):
     rec = [p for p in smash_dataset.recordings(a.rec) if smash_bc.sequences([p])]
     # The AI's recent matches at the current level only: hundreds of old falls at level 9
@@ -303,7 +333,9 @@ def loop(a):
             a.init = champion
             level = current_level()
             # Models are measured on the PC only: the Odin's matches train them but play by other rules.
-            res = [m for m in results(a.play) if m.level == level and m.measured and m.name == a.ai]
+            res = results(a.play)
+            show_strength(res, level, ais)
+            res = [m for m in res if m.level == level and m.measured and m.name == a.ai]
             best, current = version(champion), version(a.out)
             # The champion's last matches, played next to the candidate's: ten matches measured
             # alone in the morning were lucky by 1.7 stocks, and no candidate could beat them.

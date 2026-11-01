@@ -5,9 +5,22 @@
 # (NTAG215File, src/core/hle/service/nfp/nfp_types.h), registered with the AI's name as nickname
 # and owner Mii, so a game takes it as a figure of that name without any setup.
 #   amiibo.py <name> <out.bin> [amiibo id hex, Mario by default]
-import datetime, hashlib, struct, sys
+#   amiibo.py strength <strength.json> <bin>...   sets each AI's FIG level (with_strength()), prints
+#                                                 the files it rewrote
+import datetime, hashlib, json, os, struct, sys, zlib
 
 MARIO = 0x0000000000000002  # Super Smash Bros. series Mario
+
+# Smash Ultimate's game data, in the application area once it registered the figure: its CRC32
+# (zlib's, from 0 instead of ~0) first, then at XP the experience Smash shows as the FIG's level
+# and as a CPU, both u16 LE, with its thresholds (TagMo's AppDataSSBU).
+SMASH, AREA, XP = 0x34f80200, 0xdc, 0x70
+LEVEL_XP = (0x000, 0x008, 0x016, 0x029, 0x03f, 0x05a, 0x078, 0x09b, 0x0c3, 0x0ee,
+            0x11c, 0x14a, 0x178, 0x1aa, 0x1dc, 0x210, 0x244, 0x278, 0x2ac, 0x2e1,
+            0x316, 0x34b, 0x380, 0x3b6, 0x3ec, 0x422, 0x458, 0x48f, 0x4c6, 0x4fd,
+            0x53b, 0x57e, 0x5c6, 0x613, 0x665, 0x6bc, 0x718, 0x776, 0x7dc, 0x843,
+            0x8ac, 0x919, 0x99b, 0xa3b, 0xaef, 0xbb7, 0xc89, 0xd65, 0xe55, 0xf48)
+CPU_XP = (0x000, 0x03f, 0x0d2, 0x1b2, 0x2ed, 0x475, 0x643, 0x811, 0xacd)  # CPU levels 1 to 9
 
 
 def build(name, amiibo_id=MARIO):
@@ -38,6 +51,47 @@ def build(name, amiibo_id=MARIO):
     return bytes(d)
 
 
+def level(data):
+    """The level Smash shows on the figure's FIG card."""
+    return sum(struct.unpack_from("<H", data, AREA + XP)[0] >= t for t in LEVEL_XP)
+
+
+def with_strength(data, cpu):
+    """data with the experience of a FIG as strong as a CPU of level cpu (1 to 10, 10 beating a
+    CPU 9 every time), on Smash's own scale: a CPU 9 is worth level 44, level 50 is above it.
+    Unchanged when Smash has not written its game data there yet."""
+    if struct.unpack_from(">I", data, 0xb6)[0] != SMASH:
+        return data
+    steps = CPU_XP + LEVEL_XP[-1:]
+    i = min(max(int(cpu) - 1, 0), len(steps) - 2)
+    xp = round(steps[i] + (steps[i + 1] - steps[i]) * min(max(cpu - 1 - i, 0), 1))
+    d = bytearray(data)
+    struct.pack_into("<HH", d, AREA + XP, xp, min(xp, CPU_XP[-1]))
+    struct.pack_into("<I", d, AREA, zlib.crc32(d[AREA + 4:AREA + 0xd8], 0xffffffff))
+    return bytes(d)
+
+
+def set_strength(path, cpu):
+    """with_strength() on the file at path: its levels before and after when that rewrote it, else None."""
+    with open(path, "rb") as f:
+        data = f.read()
+    new = with_strength(data, cpu)
+    if new == data:
+        return None
+    with open(path + ".tmp", "wb") as f:
+        f.write(new)
+    os.replace(path + ".tmp", path)
+    return level(data), level(new)
+
+
 if __name__ == "__main__":
-    with open(sys.argv[2], "wb") as f:
-        f.write(build(sys.argv[1], int(sys.argv[3], 16) if len(sys.argv) > 3 else MARIO))
+    if sys.argv[1] == "strength":
+        with open(sys.argv[2]) as f:
+            strength = json.load(f)
+        for path in sys.argv[3:]:
+            name = os.path.splitext(os.path.basename(path))[0]
+            if name in strength and set_strength(path, strength[name]):
+                print(path)
+    else:
+        with open(sys.argv[2], "wb") as f:
+            f.write(build(sys.argv[1], int(sys.argv[3], 16) if len(sys.argv) > 3 else MARIO))

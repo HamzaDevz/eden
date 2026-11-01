@@ -84,6 +84,14 @@ def refig(right):
 
 
 REFIG_RIGHT = (12, 30)
+# With --auto, someone who wants to play cannot join a match the AIs started, nor pause it: the
+# first AI quits it from its pause menu (+, down to "Quitter", A, right to "Oui", A).
+QUIT = ([(BUTTON_PLUS, 0, 0)] * PRESS_FRAMES + [(0, 0, 0)] * 40
+        + ([(0, 0, -32767)] * 6 + [(0, 0, 0)] * 8) * 4 + [(BUTTON_A, 0, 0)] * PRESS_FRAMES
+        + [(0, 0, 0)] * 40 + [(0, 32767, 0)] * 6 + [(0, 0, 0)] * 8 + [(BUTTON_A, 0, 0)] * PRESS_FRAMES)
+QUIT_CHECK = 180  # frames after QUIT: a match still on is unpaused and played out
+QUIT_WITHIN = 900  # frames for the match to show its GO (it may be loading)
+TRAIN = os.path.expanduser("~/smash-ai/train")  # termux_ultimus.sh passes --auto while it exists
 LOOK_EVERY = 60
 PLACED_FOR = 180  # frames an amiibo put back stays on the reader, for Smash to scan it
 AMIIBO = "/storage/emulated/0/Android/data/com.miHoYo.Yuanshen.relWithDebInfo/files/amiibo"
@@ -295,6 +303,7 @@ def main():
     kinds_until, converted = 0, []  # the FIG cards made player cards on a + press
     next_ok, ok_until = 0, 0  # the AIs' A on the results
     next_plug = 0  # the next check of the AIs' controllers
+    quit_until, quit_steps, quit_pad, quit_check = 0, [], None, 0  # QUIT wanted, in progress
     idle, no_door = 0, 0  # with --challengers, presses since the last fight, looks with no door
     try:
         for line in b.frames(raw=True):
@@ -415,7 +424,23 @@ def main():
                             log(f"CPU level {wanted} wanted instead of {a.level}")
                             a.level, relevel = wanted, True
 
-            if active and len(fighters) > 1:
+            if quit_until and fighting and ready and active:
+                log("the AI quits its match for them")
+                quit_pad, quit_steps, quit_until = pads[min(active)], list(QUIT), 0
+            elif quit_until and f.index >= quit_until:
+                quit_until = 0
+            if quit_steps:
+                b.pad(quit_pad, *quit_steps.pop(0))
+                if not quit_steps:
+                    b.release(quit_pad)
+                    quit_check = f.index + QUIT_CHECK
+            elif quit_check and f.index >= quit_check:
+                if fighting:
+                    log("the match is still on: unpaused, the AI plays it out")
+                    b.pad(quit_pad, BUTTON_PLUS)
+                    quit_steps = [(0, 0, 0)] * PRESS_FRAMES
+                quit_check = 0
+            elif active and len(fighters) > 1:
                 for i, ag in active.items():
                     if i in fighters:
                         b.pad(pads[i], *ag.act(fighters))
@@ -523,10 +548,12 @@ def main():
                     elif back and not placed and b.amiibo(os.path.join(a.amiibo, f"{back[0][1]}.bin")):
                         placed, placed_until = back[0][1], f.index + PLACED_FOR
                         log(f"{placed}'s amiibo back on the reader for card {back[0][0] + 1}")
-                    # A player card on an AI's controller: never the AI's, back to its FIG card.
+                    # A player card on an AI's controller: never the AI's, back to its FIG card
+                    # (not one a + that started no match made a player card for a while).
                     lost = [(i, p) for i, (kind, chara) in now.items()
                             for p in [owners.get(i, ("", -1))[1]]
-                            if kind == smash_state.HUMAN and p in pad_figs]
+                            if kind == smash_state.HUMAN and p in pad_figs
+                            and not (kinds_until and i in converted)]
                     if lost and now != tried:
                         # Its presses anywhere but on the character select could open a menu.
                         shot = smash_farm.grab(b)
@@ -538,6 +565,7 @@ def main():
                         elif name in ("css", "ready"):
                             log(f"card 1 is a player card on {pad_figs[lost[0][1]]}'s controller: "
                                 "back to its FIG card")
+                            b.plug(lost[0][1])  # Eden may have unplugged it as someone joined
                             picking, join_steps = lost[0], refig(REFIG_RIGHT[refig_at])
                         elif name != seen:
                             log(f"screen {name} ({dist:.0f}): the AIs wait for the character select")
@@ -553,8 +581,19 @@ def main():
                        and i not in fig_pads.values()
                        and not (i in quiet and f.index < quiet_until)}
             if touched:
-                log(f"controller input from someone else {touched}, stopping")
-                return 4  # for the caller: someone wants the console back
+                # The Odin is theirs again: no more menus nor matches started, the AIs still play
+                # their FIG cards.
+                log(f"controller input from someone else {touched}: Odin given back")
+                a.auto = False
+                if os.path.exists(TRAIN):
+                    os.remove(TRAIN)
+                if press_until:
+                    for i in range(a.players):
+                        b.release(i)
+                if steps:
+                    b.release(picker)
+                quit_until = f.index + QUIT_WITHIN  # the match it may have started
+                continue
             if join_steps:  # the AI's hand is on its way to its card
                 continue
             if steps:

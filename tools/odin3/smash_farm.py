@@ -292,14 +292,17 @@ class Instance:
             try:
                 b.shot(360)
                 break
-            except (socket.timeout, RuntimeError) as e:
+            except (OSError, RuntimeError) as e:
                 if time.time() > self.started + 300:
                     b.sock.close()
                     log(f"instance {self.k}: no frame")
                     return False
-                if isinstance(e, socket.timeout):  # its answer would come out of turn
+                if isinstance(e, OSError):  # a timeout's answer would come out of turn; or reset
                     b.sock.close()
-                    b = Bridge("127.0.0.1", self.port)
+                    try:
+                        b = Bridge("127.0.0.1", self.port)
+                    except OSError:
+                        time.sleep(5)
                 else:
                     time.sleep(2)
         try:

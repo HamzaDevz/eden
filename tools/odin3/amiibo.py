@@ -85,9 +85,10 @@ def with_level(data, name, lv):
     struct.pack_into("<HH", d, AREA + XP, xp, min(xp, CPU_XP[-1]))
     struct.pack_into("<I", d, AREA, zlib.crc32(d[AREA + 4:AREA + 0xd8], 0xffffffff))
     d[0x38:0x4c] = shown_name(name, n).ljust(10, "\0").encode("utf-16-be")
-    # Smash keeps a figure's data for the session by its UID, which Eden takes from a plain file's
-    # first 7 bytes: the internal number (never checked) set to the level makes each level another figure.
-    d[1] = min(level(d), 255)
+    # Smash keeps a figure's data and nickname for the session by its UID, which Eden takes from a
+    # plain file's first 7 bytes: the internal number (never checked) bumped makes each change another figure.
+    if d != data:
+        d[1] = (d[1] + 1) % 256
     return bytes(d)
 
 

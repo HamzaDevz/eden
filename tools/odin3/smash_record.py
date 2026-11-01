@@ -46,6 +46,7 @@ import time
 
 import numpy as np
 
+import amiibo
 import smash_farm
 import smash_state
 from bridge import Bridge, Frame
@@ -147,11 +148,10 @@ def main():
     fig_pads = {name: a.pad - k for k, name in enumerate((a.figs or a.name).split(","))} \
         if a.pad is not None and a.agent else {}
     pad_figs = {p: name for name, p in fig_pads.items()}
-    # An amiibo's nickname holds 10 characters: Nostradamus is Nostradamu on its card.
-    full_names = {name[:10]: name for name in fig_pads}
-
+    # An amiibo's nickname holds 10 characters: Nostradamus is Nostradamu on its card, and Nostrad 53
+    # past level 50 (amiibo.shown_name()).
     def card_owners(f):
-        return {i: (full_names.get(nick, nick), pad)
+        return {i: (amiibo.named(nick, fig_pads), pad)
                 for i, (nick, pad) in smash_state.card_owners(f).items()}
 
     def agent(i, name):

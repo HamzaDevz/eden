@@ -5,7 +5,7 @@
 # (NTAG215File, src/core/hle/service/nfp/nfp_types.h), registered with the AI's name as nickname
 # and owner Mii, so a game takes it as a figure of that name without any setup.
 #   amiibo.py <name> <out.bin> [amiibo id hex, Mario by default]
-#   amiibo.py strength <strength.json> <bin>...   sets each AI's FIG level (with_strength()), prints
+#   amiibo.py strength <strength.json> <bin>...   sets each AI's FIG to its level (with_level()), prints
 #                                                 the files it rewrote
 import datetime, hashlib, json, os, struct, sys, zlib
 
@@ -51,34 +51,51 @@ def build(name, amiibo_id=MARIO):
     return bytes(d)
 
 
+def xp_level(xp):
+    return sum(xp >= t for t in LEVEL_XP)
+
+
 def level(data):
-    """The level Smash shows on the figure's FIG card."""
-    return sum(struct.unpack_from("<H", data, AREA + XP)[0] >= t for t in LEVEL_XP)
+    """The level an AI's FIG shows: Smash's on its card, or after its name above Smash's 50 (shown_name())."""
+    nick = data[0x38:0x4c].decode("utf-16-be").split("\0")[0].rsplit(" ", 1)
+    return int(nick[1]) if len(nick) == 2 and nick[1].isdigit() else xp_level(struct.unpack_from("<H", data, AREA + XP)[0])
 
 
-def with_strength(data, cpu):
-    """data with the experience of a FIG as strong as a CPU of level cpu (1 to 10, 10 beating a
-    CPU 9 every time), on Smash's own scale: a CPU 9 is worth level 44, level 50 is above it.
-    Unchanged when Smash has not written its game data there yet."""
+def shown_name(name, n):
+    """The nickname of an AI's FIG at level n: its name, followed by n once Smash's card stops at 50."""
+    return name[:10] if n <= 50 else f"{name[:9 - len(str(n))]} {n}"
+
+
+def named(nick, names):
+    """The one of names whose FIG shows nick (shown_name()), else nick."""
+    base = nick.rsplit(" ", 1)[0] if nick.rsplit(" ", 1)[-1].isdigit() else None
+    return next((n for n in names if n[:10] == nick or base and n.startswith(base)), nick)
+
+
+def with_level(data, name, lv):
+    """data of name's FIG at level lv (smash_rl.fit_levels(), open above 50). Unchanged when Smash
+    has not written its game data there yet."""
     if struct.unpack_from(">I", data, 0xb6)[0] != SMASH:
         return data
-    steps = CPU_XP + LEVEL_XP[-1:]
-    i = min(max(int(cpu) - 1, 0), len(steps) - 2)
-    xp = round(steps[i] + (steps[i + 1] - steps[i]) * min(max(cpu - 1 - i, 0), 1))
+    n = max(round(lv), 1)
+    i = min(max(int(lv), 1), len(LEVEL_XP)) - 1
+    xp = round(LEVEL_XP[i] + (LEVEL_XP[min(i + 1, len(LEVEL_XP) - 1)] - LEVEL_XP[i]) * min(max(lv - 1 - i, 0), 1))
     d = bytearray(data)
     struct.pack_into("<HH", d, AREA + XP, xp, min(xp, CPU_XP[-1]))
     struct.pack_into("<I", d, AREA, zlib.crc32(d[AREA + 4:AREA + 0xd8], 0xffffffff))
+    d[0x38:0x4c] = shown_name(name, n).ljust(10, "\0").encode("utf-16-be")
     # Smash keeps a figure's data for the session by its UID, which Eden takes from a plain file's
     # first 7 bytes: the internal number (never checked) set to the level makes each level another figure.
-    d[1] = level(d)
+    d[1] = min(level(d), 255)
     return bytes(d)
 
 
-def set_strength(path, cpu):
-    """with_strength() on the file at path: its levels before and after when that rewrote it, else None."""
+def set_level(path, lv):
+    """with_level() on the file at path, named after it: its levels before and after when that
+    rewrote it, else None."""
     with open(path, "rb") as f:
         data = f.read()
-    new = with_strength(data, cpu)
+    new = with_level(data, os.path.splitext(os.path.basename(path))[0], lv)
     if new == data:
         return None
     with open(path + ".tmp", "wb") as f:
@@ -90,10 +107,10 @@ def set_strength(path, cpu):
 if __name__ == "__main__":
     if sys.argv[1] == "strength":
         with open(sys.argv[2]) as f:
-            strength = json.load(f)
+            levels = json.load(f)
         for path in sys.argv[3:]:
             name = os.path.splitext(os.path.basename(path))[0]
-            if name in strength and set_strength(path, strength[name]):
+            if name in levels and set_level(path, levels[name]):
                 print(path)
     else:
         with open(sys.argv[2], "wb") as f:

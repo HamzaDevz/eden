@@ -82,6 +82,7 @@ extern "C" {
 #include "core/hle/service/filesystem/filesystem.h"
 #include "core/hle/service/set/system_settings_server.h"
 #include "core/loader/loader.h"
+#include "core/tools/game_bridge.h"
 #include "frontend_common/config.h"
 #include "frontend_common/firmware_manager.h"
 #ifdef ENABLE_UPDATE_CHECKER
@@ -1718,6 +1719,12 @@ jint Java_org_yuzu_yuzu_1emu_NativeLibrary_getVirtualAmiiboState(JNIEnv* env, jo
     }
 
     return static_cast<jint>(virtual_amiibo->GetCurrentState());
+}
+
+jstring Java_org_yuzu_yuzu_1emu_NativeLibrary_getGameBadges(JNIEnv* env, jobject jobj) {
+    auto& session = EmulationSession::GetInstance();
+    auto* bridge = session.IsRunning() ? session.System().GetGameBridge() : nullptr;
+    return Common::Android::ToJString(env, bridge != nullptr ? bridge->Badges() : std::string{});
 }
 
 jint Java_org_yuzu_yuzu_1emu_NativeLibrary_loadAmiibo(JNIEnv* env, jobject jobj,

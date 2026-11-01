@@ -669,6 +669,12 @@ object NativeLibrary {
     external fun getVirtualAmiiboState(): Int
 
     /**
+     * Level badges the game bridge was asked to draw over the game, one
+     * "<id> <x> <y> <size> <level> <gain>" line each (per mille of the 16:9 frame).
+     */
+    external fun getGameBadges(): String
+
+    /**
      * Loads amiibo data into the currently running emulation session.
      *
      * @param data Raw amiibo file contents.

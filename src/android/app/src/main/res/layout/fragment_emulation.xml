@@ -28,6 +28,14 @@
                 android:focusableInTouchMode="false"
                 android:defaultFocusHighlightEnabled="false" />
 
+            <!-- Level badges the game bridge draws over the game -->
+            <FrameLayout
+                android:id="@+id/game_badges"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:clickable="false"
+                android:focusable="false" />
+
             <com.google.android.material.card.MaterialCardView
                 android:id="@+id/loading_indicator"
                 style="?attr/materialCardViewOutlinedStyle"

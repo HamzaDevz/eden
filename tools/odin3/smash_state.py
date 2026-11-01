@@ -26,15 +26,17 @@ PLAYERS, PLAYER_SIZE, NAME = 0x52c5730, 0x260, 0x28
 # amiibo nickname of a FIG card in UTF-16 at +0xd0 (10 characters, empty while it waits for one).
 CARDS, CARD_SIZE, CARD_KIND, CARD_CHARA, CARD_NICK = 0x5308798, 0x1c8, 0x8, 0x10, 0xd0
 HUMAN, CPU, FIG, NO_CARD = 0, 1, 2, 3
-# Second card table, one 0x240 entry per card: s32 controller (npad, -1 for none) at +0, then a
-# copy of the card at +0x88. The match takes each fighter's kind and controller from both.
-CARD_PADS, CARD_PAD_SIZE, CARD_COPY = 0x53095b0, 0x240, 0x88
+# Second card table, one 0x240 entry per card: s32 controller (npad, -1 for none) at +0, the
+# name tag's record in the save data (TAGS) at +4, then a copy of the card at +0x88. The match
+# takes each fighter's kind and controller from both.
+CARD_PADS, CARD_PAD_SIZE, CARD_TAG, CARD_COPY = 0x53095b0, 0x240, 0x4, 0x88
 MARIO = 0x0edaf3c863  # hash40("ui_chara_mario")
 ENTRY_PAD = 0x10  # s32 controller of a FighterEntry, -1 for a CPU or a FIG
 # The save data the game works on and writes to system_data.bin, at [[main+0x5314508]] (a second
 # copy has no fixed path): a name tag there is a u32 count of characters, then its name in UTF-16
 # and a 0 (10 characters at most, in 0x18 bytes that may keep an older name's after the 0).
 SAVE = 0x5314508
+TAGS, TAG_SIZE = 0x42f8, 0xf7d8  # its name tag records, each starting with the name (Hamz is 1)
 
 ACC = (0x4160, 0x20)  # current fighter, then its BattleObjectModuleAccessor
 
@@ -96,7 +98,7 @@ def watch_all(bridge, players, work=False):
 def watch_cards(bridge):
     for i in range(8):
         bridge.ask(f"watch {i}card {CARD_NICK + 0x14:#x} main+{CARDS + i * CARD_SIZE:#x}", "ok")
-        bridge.ask(f"watch {i}cpad 4 main+{CARD_PADS + i * CARD_PAD_SIZE:#x}", "ok")
+        bridge.ask(f"watch {i}cpad {CARD_TAG + 4} main+{CARD_PADS + i * CARD_PAD_SIZE:#x}", "ok")
 
 
 def cards(frame):
@@ -119,8 +121,14 @@ def card_owners(frame):
         raw, pad = frame.watches.get(f"{i}card"), frame.watches.get(f"{i}cpad")
         if raw and pad:
             nick = raw[CARD_NICK:CARD_NICK + 0x14].decode("utf-16-le", "replace").split("\0")[0]
-            out[i] = nick, struct.unpack("<i", pad)[0]
+            out[i] = nick, struct.unpack_from("<i", pad)[0]
     return out
+
+
+def card_tags(frame):
+    """Name tag record (tag_name()) of each character select card."""
+    return {i: struct.unpack_from("<i", raw, CARD_TAG)[0] for i in range(8)
+            for raw in [frame.watches.get(f"{i}cpad")] if raw and len(raw) >= CARD_TAG + 4}
 
 
 def names(frame, players):
@@ -130,6 +138,16 @@ def names(frame, players):
         raw = frame.watches.get(f"{i}tag")
         out[i] = raw.decode("utf-16-le", "replace").split("\0")[0] if raw else ""
     return out
+
+
+def tag_name(bridge, main, record):
+    """The name of that name tag record in the save data, "" for none. main is the base of the
+    main module ("info")."""
+    holder = bridge.read(main + SAVE, 8)
+    save = holder and bridge.read(int.from_bytes(holder, "little"), 8)
+    data = save and 0 <= record < 64 and bridge.read(int.from_bytes(save, "little") + TAGS + record * TAG_SIZE, 0x18)
+    count = int.from_bytes(data[:4], "little") if data else 0
+    return data[4:4 + count * 2].decode("utf-16-le", "replace") if 0 < count <= 10 else ""
 
 
 def rename_tag(bridge, main, tag, new):

@@ -27,6 +27,10 @@
 //                                     long as the client takes (resumed when it disconnects)
 //   step <frames> [height]            runs <frames> frames then pauses -> the shot of the next
 //                                     frame, or ok step <frame> without a height
+//   badge <id> <x> <y> <size> <level> <gain>   a level badge for the frontend to draw over the
+//                                     game, centered at x, y and size wide (per mille of the
+//                                     16:9 frame), gain > 0 showing it went up; kept 2 s unless
+//                                     sent again -> ok badge. badge <id|*> - takes it off
 // Each composited frame: f <frame> <time us> [p <index> <buttons> <lx> <ly> <rx> <ry>]...
 //                        [w <id> <hex|->]...
 
@@ -35,6 +39,7 @@
 #include <chrono>
 #include <condition_variable>
 #include <istream>
+#include <map>
 #include <mutex>
 #include <optional>
 #include <sstream>
@@ -69,6 +74,7 @@ constexpr u64 MaxRead = 0x10000;
 constexpr u64 MaxWatch = 0x1000;
 constexpr auto SyncTimeout = std::chrono::seconds{1};
 constexpr u64 MaxShotHeight = 1080;
+constexpr auto BadgeLife = std::chrono::seconds{2};
 
 void AppendHex(std::string& out, const std::vector<u8>& data) {
     static constexpr char digits[] = "0123456789abcdef";
@@ -186,6 +192,17 @@ struct GameBridge::Impl {
             publish_pending = false;
             Publish();
         });
+    }
+
+    std::string Badges() {
+        std::scoped_lock lock{badges_mutex};
+        const auto now = std::chrono::steady_clock::now();
+        std::erase_if(badges, [now](const auto& badge) { return badge.second.until < now; });
+        std::string out;
+        for (const auto& [id, badge] : badges) {
+            out += badge.line + '\n';
+        }
+        return out;
     }
 
 private:
@@ -413,6 +430,21 @@ private:
                      ? fmt::format("sym {} -\n", args[1])
                      : fmt::format("sym {} {:x} {:x}\n", args[1], it->second.first,
                                    it->second.second));
+        } else if (command == "badge" && args.size() == 3 && args[2] == "-") {
+            std::scoped_lock lock{badges_mutex};
+            if (args[1] == "*") {
+                badges.clear();
+            } else {
+                badges.erase(args[1]);
+            }
+            Send("ok badge\n");
+        } else if (command == "badge" && args.size() == 7) {
+            const auto line = fmt::format("{} {} {} {} {} {}", args[1], ParseU64(args[2]),
+                                          ParseU64(args[3]), ParseU64(args[4]), ParseU64(args[5]),
+                                          ParseU64(args[6]));
+            std::scoped_lock lock{badges_mutex};
+            badges[args[1]] = {line, std::chrono::steady_clock::now() + BadgeLife};
+            Send("ok badge\n");
         } else if (command == "info") {
             std::string reply = fmt::format("info {:016x} ", system.GetApplicationProcessProgramID());
             for (const u8 byte : system.GetApplicationProcessBuildID()) {
@@ -622,6 +654,13 @@ private:
     std::optional<u64> main_base;
     bool symbols_loaded{};
     Core::Symbols::Symbols symbols;
+
+    struct Badge {
+        std::string line;
+        std::chrono::steady_clock::time_point until;
+    };
+    std::mutex badges_mutex;
+    std::map<std::string, Badge> badges;
 };
 
 GameBridge::GameBridge(Core::System& system, u16 port, GameBridgePadSink pad_sink,
@@ -632,6 +671,10 @@ GameBridge::~GameBridge() = default;
 
 void GameBridge::OnFrame() {
     impl->OnFrame();
+}
+
+std::string GameBridge::Badges() {
+    return impl->Badges();
 }
 
 } // namespace Tools

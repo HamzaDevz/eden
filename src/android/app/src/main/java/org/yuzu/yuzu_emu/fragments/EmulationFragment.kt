@@ -100,6 +100,7 @@ import org.yuzu.yuzu_emu.utils.ViewUtils
 import org.yuzu.yuzu_emu.utils.ViewUtils.setVisible
 import org.yuzu.yuzu_emu.utils.collect
 import org.yuzu.yuzu_emu.utils.CustomSettingsHandler
+import org.yuzu.yuzu_emu.views.LevelBadgeView
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.nio.ByteBuffer
@@ -163,6 +164,16 @@ class EmulationFragment : Fragment(), SurfaceHolder.Callback {
         override fun run() {
             offerAmiibo()
             amiiboOfferHandler.postDelayed(this, 500)
+        }
+    }
+
+    // Level badges the game bridge asks for over the game (a Smash card's level on the Odin)
+    private val badgeHandler = Handler(Looper.getMainLooper())
+    private val badgeViews = mutableMapOf<String, LevelBadgeView>()
+    private val badgeRunnable = object : Runnable {
+        override fun run() {
+            updateBadges()
+            badgeHandler.postDelayed(this, 200)
         }
     }
 
@@ -1514,6 +1525,39 @@ class EmulationFragment : Fragment(), SurfaceHolder.Callback {
             .show()
     }
 
+    private fun updateBadges() {
+        val b = _binding ?: return
+        val surface = b.surfaceEmulation
+        val lines = if (NativeLibrary.isRunning()) NativeLibrary.getGameBadges() else ""
+        val shown = mutableSetOf<String>()
+        for (line in lines.lineSequence()) {
+            val fields = line.split(' ')
+            val numbers = fields.drop(1).mapNotNull { it.toIntOrNull() }
+            if (fields.size != 6 || numbers.size != 5) {
+                continue
+            }
+            val (x, y, size, level, gain) = numbers
+            val side = (size * surface.width / 1000).coerceAtLeast(1)
+            val view = badgeViews.getOrPut(fields[0]) {
+                LevelBadgeView(requireContext()).also { b.gameBadges.addView(it, side, side * 2) }
+            }
+            if (view.layoutParams.width != side) {
+                view.layoutParams = view.layoutParams.apply {
+                    width = side
+                    height = side * 2
+                }
+            }
+            // The medal is the bottom half of the view, centered on x, y
+            view.x = surface.x + x * surface.width / 1000f - side / 2f
+            view.y = surface.y + y * surface.height / 1000f - side * 1.5f
+            view.show(level, gain)
+            shown += fields[0]
+        }
+        for (id in badgeViews.keys - shown) {
+            b.gameBadges.removeView(badgeViews.remove(id))
+        }
+    }
+
     private fun loadAmiiboFile(file: File) {
         amiiboLoadJob?.cancel()
         amiiboLoadJob = viewLifecycleOwner.lifecycleScope.launch {
@@ -1533,6 +1577,7 @@ class EmulationFragment : Fragment(), SurfaceHolder.Callback {
 
     override fun onPause() {
         amiiboOfferHandler.removeCallbacks(amiiboOfferRunnable)
+        badgeHandler.removeCallbacks(badgeRunnable)
         if (this::emulationState.isInitialized) {
             if (emulationState.isRunning && emulationActivity?.isInPictureInPictureMode != true) {
                 pauseEmulationAndCaptureFrame()
@@ -1550,6 +1595,8 @@ class EmulationFragment : Fragment(), SurfaceHolder.Callback {
         amiiboLoadJob = null
         amiiboOfferHandler.removeCallbacks(amiiboOfferRunnable)
         amiiboOffer?.dismiss()
+        badgeHandler.removeCallbacks(badgeRunnable)
+        badgeViews.clear()
         perfStatsRunnable?.let { perfStatsUpdateHandler.removeCallbacks(it) }
         socRunnable?.let { socUpdateHandler.removeCallbacks(it) }
         handler.removeCallbacksAndMessages(null)
@@ -1572,6 +1619,8 @@ class EmulationFragment : Fragment(), SurfaceHolder.Callback {
         val b = _binding ?: return
         amiiboOfferHandler.removeCallbacks(amiiboOfferRunnable)
         amiiboOfferHandler.post(amiiboOfferRunnable)
+        badgeHandler.removeCallbacks(badgeRunnable)
+        badgeHandler.post(badgeRunnable)
         updateStatsPosition(IntSetting.PERF_OVERLAY_POSITION.getInt())
         updateSocPosition(IntSetting.SOC_OVERLAY_POSITION.getInt())
 

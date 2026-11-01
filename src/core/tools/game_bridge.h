@@ -37,6 +37,10 @@ public:
     /// Called by the display once per composited frame.
     void OnFrame();
 
+    /// The level badges an agent asked to draw over the game ("badge"), one
+    /// "<id> <x> <y> <size> <level> <gain>" line each.
+    std::string Badges();
+
 private:
     struct Impl;
     std::unique_ptr<Impl> impl;

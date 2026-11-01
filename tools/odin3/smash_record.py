@@ -110,6 +110,77 @@ def phase():
         return "cpu"
 
 
+# The open cards share the bottom of the character select, left of its buttons, from this height
+# (per mille of the frame): a level badge goes on the top right corner of a card's portrait.
+CARDS_RIGHT, CARDS_TOP = 956, 633
+
+
+def badge_place(rank, n):
+    """Center and size (per mille of the frame width, y of its height) of the badge of the rank-th
+    of n open cards."""
+    w = CARDS_RIGHT / n
+    size = round(min(max(w * 0.3, 45), 80))
+    return round(w * (rank + 0.82)), round(CARDS_TOP + size * 16 / 9 * 0.55), size
+
+
+def base(nick):
+    """A FIG nickname or name tag without the level after it (amiibo.shown_name())."""
+    head, _, tail = nick.rpartition(" ")
+    return head if head and tail.isdigit() else nick
+
+
+class Badges:
+    """--badges: on the character select, Eden draws the level from --strength over each card that
+    has one, an AI's FIG card by its nickname and a player card by its name tag, popping with what
+    it gained since it was last shown there (the file keeps those levels)."""
+
+    def __init__(self, path, strength):
+        self.path, self.strength = os.path.expanduser(path), os.path.expanduser(strength)
+        self.levels, self.mtime, self.sent = {}, 0, set()
+        try:
+            with open(self.path) as fh:
+                self.shown = json.load(fh)
+        except (OSError, ValueError):
+            self.shown = {}
+
+    def named(self, nick):
+        """The one with a level in --strength whose FIG or name tag shows nick, else None."""
+        head = base(nick)
+        return next((n for n in self.levels if len(head) >= 4 and n.startswith(head)), None)
+
+    def wanted(self, b, main, f):
+        """{card: (name, level)} of the cards that get a badge, main being the main module's base."""
+        if os.path.exists(self.strength) and os.path.getmtime(self.strength) != self.mtime:
+            self.mtime = os.path.getmtime(self.strength)
+            with open(self.strength) as fh:
+                self.levels = json.load(fh)
+        owners, tags, out = smash_state.card_owners(f), smash_state.card_tags(f), {}
+        for i, (kind, _) in smash_state.cards(f).items():
+            who = owners.get(i, ("",))[0] if kind == smash_state.FIG else \
+                smash_state.tag_name(b, main, tags.get(i, -1)) if kind == smash_state.HUMAN else ""
+            name = self.named(who) if who else None
+            if name:
+                out[i] = name, max(int(self.levels[name]), 1)
+        return out
+
+    def show(self, b, f, wanted=None):
+        """Sends the badges of wanted (wanted()), or takes them all off without it."""
+        cards = sorted(smash_state.cards(f))
+        for i, (name, lv) in (wanted or {}).items():
+            gain = lv - self.shown.get(name, lv)
+            b.badge(i, *badge_place(cards.index(i), len(cards)), lv, max(gain, 0))
+            if self.shown.get(name) != lv:
+                if gain:
+                    log(f"{name}'s card shows level {lv} ({gain:+d})")
+                self.shown[name] = lv
+                with open(self.path + ".tmp", "w") as fh:
+                    json.dump(self.shown, fh)
+                os.replace(self.path + ".tmp", self.path)
+        for i in self.sent - set(wanted or {}):
+            b.badge(i)
+        self.sent = set(wanted or {})
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--host", default="127.0.0.1")
@@ -138,6 +209,8 @@ def main():
     ap.add_argument("--tag", help="a person's name tag, renamed as the AIs' FIG cards with their "
                     "level from --strength after it (Hamz 43)")
     ap.add_argument("--strength", help="smash_rl.py's strength.json, the person's level as Hamza")
+    ap.add_argument("--badges", help="with --pad and --strength, Eden draws each card's level over "
+                    "it on the character select (Badges); this file keeps what it needs")
     a = ap.parse_args()
     # Started in the background, the process ignores SIGINT: both signals end it cleanly.
     def stop(*_):
@@ -203,6 +276,7 @@ def main():
         log(f"name tag {a.tag} is now {new}" if done else f"name tag {a.tag} not in the save data")
         return mtime
     tag_seen = tag_level(0) if a.tag and a.strength else None
+    badges = Badges(a.badges, a.strength) if a.badges and a.strength and a.pad is not None else None
 
     out, path, frames, gaps, last, me = None, None, 0, 0, None, None
     matches, press_until, next_press, pressed, flags = 0, 0, -PRESS_EVERY, 0, None
@@ -256,6 +330,8 @@ def main():
                     pad = int.from_bytes(raw, "little", signed=True) if raw else -1
                     if pad in pad_figs and not fighters[i].cpu and (pad_figs[pad], pad) in from_figs:
                         figs[i] = pad_figs[pad]
+                if badges:
+                    badges.show(b, f)
                 if fig_pads:
                     me = min(figs, default=None)
                 else:
@@ -387,6 +463,8 @@ def main():
                     # Read from this frame, as + (or A on the "ready" banner) may come right after
                     # the amiibo's nickname; an A that starts nothing only makes them player cards
                     # sooner.
+                    if badges:
+                        badges.show(b, f)
                     owners, converted = card_owners(f), {}
                     for i, (kind, _) in smash_state.cards(f).items():
                         nick = owners.get(i, ("",))[0]
@@ -402,6 +480,12 @@ def main():
                 elif count == 0 and f.index >= next_look:
                     next_look = f.index + LOOK_EVERY
                     now, owners = smash_state.cards(f), card_owners(f)
+                    if badges:
+                        # Only on the character select itself, a screenshot tells.
+                        wanted = badges.wanted(b, int(main, 16), f)
+                        shot = smash_farm.grab(b) if wanted else None
+                        css = shot and smash_farm.screen(shot[0], refs)[0] in ("css", "ready")
+                        badges.show(b, f, wanted if css else None)
                     seated, ai_figs, waiting = {}, {}, set()
                     for i, (kind, chara) in now.items():
                         nick, pad = owners.get(i, ("", -1))

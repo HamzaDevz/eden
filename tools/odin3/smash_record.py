@@ -482,7 +482,7 @@ def main():
                     now, owners = smash_state.cards(f), card_owners(f)
                     if badges:
                         # Only on the character select itself, a screenshot tells.
-                        wanted = badges.wanted(b, int(main, 16), f)
+                        wanted = badges.wanted(b, int(info[3].split("=")[1], 16), f)
                         shot = smash_farm.grab(b) if wanted else None
                         css = shot and smash_farm.screen(shot[0], refs)[0] in ("css", "ready")
                         badges.show(b, f, wanted if css else None)

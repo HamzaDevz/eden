@@ -1532,25 +1532,27 @@ class EmulationFragment : Fragment(), SurfaceHolder.Callback {
         val shown = mutableSetOf<String>()
         for (line in lines.lineSequence()) {
             val fields = line.split(' ')
-            val numbers = fields.drop(1).mapNotNull { it.toIntOrNull() }
-            if (fields.size != 6 || numbers.size != 5) {
+            val numbers = fields.drop(1).take(5).mapNotNull { it.toLongOrNull() }
+            if (fields.size !in 6..7 || numbers.size != 5) {
                 continue
             }
             val (x, y, size, level, gain) = numbers
-            val side = (size * surface.width / 1000).coerceAtLeast(1)
+            val side = (size * surface.width / 1000).toInt().coerceAtLeast(1)
+            // A plate under its label, almost twice as wide as it is high
+            val wide = side * 9 / 5
             val view = badgeViews.getOrPut(fields[0]) {
-                LevelBadgeView(requireContext()).also { b.gameBadges.addView(it, side, side * 2) }
+                LevelBadgeView(requireContext()).also { b.gameBadges.addView(it, wide, side * 2) }
             }
-            if (view.layoutParams.width != side) {
+            if (view.layoutParams.width != wide) {
                 view.layoutParams = view.layoutParams.apply {
-                    width = side
+                    width = wide
                     height = side * 2
                 }
             }
-            // The medal is the bottom half of the view, centered on x, y
-            view.x = surface.x + x * surface.width / 1000f - side / 2f
+            // The plate is the bottom half of the view, centered on x, y
+            view.x = surface.x + x * surface.width / 1000f - wide / 2f
             view.y = surface.y + y * surface.height / 1000f - side * 1.5f
-            view.show(level, gain)
+            view.show(level, gain, fields.getOrElse(6) { "" })
             shown += fields[0]
         }
         for (id in badgeViews.keys - shown) {

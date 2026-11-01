@@ -112,9 +112,9 @@ class Bridge:
     def release(self, player):
         self.send(f"release {player}")
 
-    def badge(self, bid, x=0, y=0, size=0, level=0, gain=0):
-        """A level badge Eden draws over the game for 2 s (game_bridge.cpp), off without a size."""
-        self.send(f"badge {bid} {x} {y} {size} {level} {gain}" if size else f"badge {bid} -")
+    def badge(self, bid, x=0, y=0, size=0, level=0, gain=0, label=""):
+        """A points badge Eden draws over the game for 2 s (game_bridge.cpp), off without a size."""
+        self.send(f"badge {bid} {x} {y} {size} {level} {gain} {label}".rstrip() if size else f"badge {bid} -")
 
     def plug(self, player):
         """Connects the controller of that player again."""

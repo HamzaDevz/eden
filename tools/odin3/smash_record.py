@@ -473,7 +473,9 @@ def main():
                           ).mean() < 8 and not smash_farm.on_mario(shot[1], mario):
                     log("player 1 picks Mario for the challenger")
                     if not smash_farm.pick_mario(b, mario, lockstep=bool(a.sync)):
-                        log("Mario not found")
+                        # Another select (Classic's, A on Games & More once the door left).
+                        log("Mario not found: not Challenger's Approach, stopping")
+                        return
                     b.ask("stream 1", "ok")  # play stops the stream when done
                     if a.sync:
                         b.sync(a.sync)

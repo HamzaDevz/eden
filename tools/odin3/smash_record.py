@@ -252,6 +252,7 @@ class Badges:
 
     def __init__(self, path, points):
         self.path, self.points, self.sent = os.path.expanduser(path), points, set()
+        self.labels = False  # whether Eden takes a badge's label, older ones refuse the badge with it
         try:
             with open(self.path) as fh:
                 self.shown = json.load(fh)
@@ -277,7 +278,7 @@ class Badges:
         for i, (mode, name, n) in (wanted or {}).items():
             key = f"{mode} {name}"
             gain = n - self.shown.get(key, n)
-            b.badge(i, *badge_place(cards.index(i), len(cards)), n, gain, MODES[mode])
+            b.badge(i, *badge_place(cards.index(i), len(cards)), n, gain, MODES[mode] if self.labels else "")
             if self.shown.get(key) != n:
                 if gain:
                     log(f"{name}'s card shows {n:,} points in {mode} ({gain:+,})")
@@ -391,6 +392,9 @@ def main():
     tag_seen = tag_level(0) if a.tag and a.strength else None
     points = Points(a.points, fig_pads) if a.points and fig_pads else None
     badges = Badges(a.badges, points) if a.badges and points else None
+    if badges:
+        badges.labels = b.ask("badge labels 1 1 1 0 0 x", "ok").startswith("ok")
+        b.badge("labels")
 
     out, path, frames, gaps, last, me = None, None, 0, 0, None, None
     matches, press_until, next_press, pressed, flags = 0, 0, -PRESS_EVERY, 0, None

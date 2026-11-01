@@ -54,6 +54,12 @@ FIELDS = {
     "slot": (1, (0x5918,)),  # current one, only slot 0 is read above
 }
 
+# FighterInformation's data at [entry+0xf8], which "info" reads from +0x90: u32 falls per period
+# at +0xcc (lua_bind dead_count), then the KOs it scored on each entry, u32 [3 periods][8] at
+# +0xdc (total_beat_count).
+KOS = (0x60, (0xf8, 0xdc))
+TEAM = (4, (*ACC, 0xd8, 0x10))  # TeamModule: team number, each fighter's own outside team battles
+
 # WorkModule arrays (table 0 instance, 1 status): floats, ints (8-byte stride), flag words.
 WORK = {
     "wf0": (0x1e0, (*ACC, 0x50, 0x18, 0, 0x10, 0)),
@@ -92,6 +98,10 @@ def watch_all(bridge, players, work=False):
             size = 8 if table.startswith("wi") else 4
             chain = " ".join(f"{o:#x}" for o in (0, 0x20 + i * 8, *WORK[table][1][:-1], j * size))
             bridge.ask(f"watch {i}{name} {size:#x} {FIGHTER_MANAGER} {chain}", "ok")
+        chain = " ".join(f"{o:#x}" for o in (0, 0x20 + i * 8, *KOS[1]))
+        bridge.ask(f"watch {i}kos {KOS[0]:#x} {FIGHTER_MANAGER} {chain}", "ok")
+        chain = " ".join(f"{o:#x}" for o in (0, 0x20 + i * 8, *TEAM[1]))
+        bridge.ask(f"watch {i}team {TEAM[0]:#x} {FIGHTER_MANAGER} {chain}", "ok")
         bridge.ask(f"watch {i}tag 0x14 main+{PLAYERS + i * PLAYER_SIZE + NAME:#x}", "ok")
 
 
@@ -140,6 +150,18 @@ def names(frame, players):
     return out
 
 
+def kos(frame, players):
+    """{fighter: (falls, {entry: KOs it scored on that one}, team)} of the fighters that read (KOS, TEAM)."""
+    out = {}
+    for i in range(players):
+        info, raw, team = (frame.watches.get(f"{i}{w}") for w in ("info", "kos", "team"))
+        if info and raw and len(raw) == KOS[0] and team:
+            beat = struct.unpack("<24I", raw)
+            out[i] = (sum(struct.unpack_from("<3I", info, 0x3c)), {j: beat[j] + beat[8 + j] + beat[16 + j] for j in range(8)},
+                      int.from_bytes(team, "little"))
+    return out
+
+
 def tag_name(bridge, main, record):
     """The name of that name tag record in the save data, "" for none. main is the base of the
     main module ("info")."""
@@ -163,7 +185,7 @@ def rename_tag(bridge, main, tag, new):
         count = int.from_bytes(data[:4], "little")
         name = data[4:4 + count * 2].decode("utf-16-le", "replace") if 0 < count <= 10 else ""
         after = name[len(tag):]
-        if name.startswith(tag) and (not after or after[0] == " " and after[1:].isdigit()):
+        if name.startswith(tag) and (not after or after[0] == " " and after[1:].lstrip("-").isdigit()):
             name16 = struct.pack("<I", len(new)) + (new[:10] + "\0").encode("utf-16-le")
             bridge.poke("tag", name16, f"main+{SAVE:#x}", 0, TAGS + record * TAG_SIZE)
             bridge.unpoke("tag")

@@ -10,12 +10,12 @@ while true; do
      python -c "import socket; socket.create_connection(('127.0.0.1', 6560), 2)" 2>/dev/null; then
     # With ~/smash-ai/train (the Odin left to them), they also start each match and pass the
     # results; a press on someone else's controller stops that and gives the Odin back (the
-    # recorder removes ~/smash-ai/train and quits a match it started). Hamza's
-    # name tag shows his level from the strength.json the Mac pushes, as their FIG cards theirs,
-    # and Eden draws each one's level over its card on the character select.
+    # recorder removes ~/smash-ai/train and quits a match it started). Everyone's Smash points
+    # (+1 a KO, -1 a fall, against people) are kept by name, shown after each person's name tag
+    # and drawn by Eden over each card on the character select.
     python smash_record.py --players 8 --pad 7 --figs Ultimus,Optimus,Nostradamus,Magnus \
       --agent ~/smash-ai/models/ultimus.npz --sparring --min-battery 0 --sync 1 \
-      --tag Hamz,Bare --strength ~/smash-ai/strength.json --badges ~/smash-ai/badges.json \
+      --points ~/smash-ai/points.json --badges ~/smash-ai/badges-points.json \
       $([ -e ~/smash-ai/train ] && echo --auto) >> ~/smash-ai/ultimus.log 2>&1
   fi
   sleep 30

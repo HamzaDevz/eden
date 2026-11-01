@@ -135,44 +135,83 @@ def badge_place(rank, n):
 def base(nick):
     """A FIG nickname or name tag without the level after it (amiibo.shown_name())."""
     head, _, tail = nick.rpartition(" ")
-    return head if head and tail.isdigit() else nick
+    return head if head and tail.lstrip("-").isdigit() else nick
+
+
+class Points:
+    """--points: everyone's Smash points by name, an AI's or a name tag's, as timed battles count
+    them: in a match with a person's name tag and someone else named, +1 for each KO on another
+    named fighter of another team and -1 for each fall. The file is written at every change."""
+
+    def __init__(self, path, ais):
+        self.path = os.path.expanduser(path)
+        try:
+            with open(self.path) as fh:
+                self.points = json.load(fh)
+        except (OSError, ValueError):
+            self.points = {}
+        for name in ais:  # their FIG cards show 10 characters of their names
+            self.points.setdefault(name, 0)
+        self.names, self.people, self.seen = {}, {}, {}
+
+    def key(self, name):
+        """The name the points of a FIG nickname or name tag are kept under: without the number
+        after it, or the longer name it was cut from (amiibo.shown_name())."""
+        head = base(name)
+        return head if head in self.points or len(head) < 5 else next(
+            (n for n in self.points if n.startswith(head)), head)
+
+    def start(self, ais, tags):
+        """A match of ais and people's tags ({fighter: name}): counted with one of each at least,
+        or with two people."""
+        names = {i: self.key(n) for i, n in {**tags, **ais}.items() if n}
+        self.people = {names[i]: base(n) for i, n in tags.items() if n and i not in ais}
+        self.names = names if self.people and len(names) > 1 else {}
+        self.seen = {}
+
+    def update(self, f, players):
+        changes = {}
+        now = smash_state.kos(f, players) if self.names else {}
+        for i, (falls, beat, team) in now.items():
+            was, self.seen[i] = self.seen.get(i), (falls, beat)
+            if was is None:
+                continue
+            if i in self.names and falls > was[0]:
+                changes[self.names[i]] = changes.get(self.names[i], 0) - (falls - was[0])
+            for j, n in beat.items():  # nothing for a KO on a teammate, which still costs them a fall
+                if n > was[1][j] and i in self.names and j in self.names and j in now and now[j][2] != team:
+                    changes[self.names[i]] = changes.get(self.names[i], 0) + n - was[1][j]
+        if changes:
+            for name, d in changes.items():
+                self.points[name] = self.points.get(name, 0) + d
+            with open(self.path + ".tmp", "w") as fh:
+                json.dump(self.points, fh)
+            os.replace(self.path + ".tmp", self.path)
+            log("points: " + ", ".join(f"{n} {self.points[n]} ({d:+d})" for n, d in changes.items()))
 
 
 class Badges:
-    """--badges: on the character select, Eden draws the level from --strength over each card that
-    has one, an AI's FIG card by its nickname and a player card by its name tag, popping with what
-    it gained since it was last shown there (the file keeps those levels)."""
+    """--badges: on the character select, Eden draws the Smash points (Points) over each card that
+    has a name, an AI's FIG card by its nickname and a player card by its name tag, popping with
+    what they won or lost since they were last shown there (the file keeps those)."""
 
-    def __init__(self, path, strength, tags=()):
-        self.path, self.strength = os.path.expanduser(path), os.path.expanduser(strength)
-        self.tags = set(tags)  # the person's name tags (--tag), with Hamza's level
-        self.levels, self.mtime, self.sent = {}, 0, set()
+    def __init__(self, path, points):
+        self.path, self.points, self.sent = os.path.expanduser(path), points, set()
         try:
             with open(self.path) as fh:
                 self.shown = json.load(fh)
         except (OSError, ValueError):
             self.shown = {}
 
-    def named(self, nick):
-        """The one with a level in --strength whose FIG or name tag shows nick, else None."""
-        head = base(nick)
-        if head in self.tags and "Hamza" in self.levels:
-            return "Hamza"
-        return next((n for n in self.levels if len(head) >= 4 and n.startswith(head)), None)
-
     def wanted(self, b, main, f):
-        """{card: (name, level)} of the cards that get a badge, main being the main module's base."""
-        if os.path.exists(self.strength) and os.path.getmtime(self.strength) != self.mtime:
-            self.mtime = os.path.getmtime(self.strength)
-            with open(self.strength) as fh:
-                self.levels = json.load(fh)
+        """{card: (name, points)} of the cards that get a badge, main being the main module's base."""
         owners, tags, out = smash_state.card_owners(f), smash_state.card_tags(f), {}
         for i, (kind, _) in smash_state.cards(f).items():
             who = owners.get(i, ("",))[0] if kind == smash_state.FIG else \
                 smash_state.tag_name(b, main, tags.get(i, -1)) if kind == smash_state.HUMAN else ""
-            name = self.named(who) if who else None
-            if name:
-                out[i] = name, max(int(self.levels[name]), 1)
+            if who:
+                name = self.points.key(who)
+                out[i] = name, self.points.points.get(name, 0)
         return out
 
     def show(self, b, f, wanted=None):
@@ -180,10 +219,10 @@ class Badges:
         cards = sorted(smash_state.cards(f))
         for i, (name, lv) in (wanted or {}).items():
             gain = lv - self.shown.get(name, lv)
-            b.badge(i, *badge_place(cards.index(i), len(cards)), lv, max(gain, 0))
+            b.badge(i, *badge_place(cards.index(i), len(cards)), lv, gain)
             if self.shown.get(name) != lv:
                 if gain:
-                    log(f"{name}'s card shows level {lv} ({gain:+d})")
+                    log(f"{name}'s card shows {lv} points ({gain:+d})")
                 self.shown[name] = lv
                 with open(self.path + ".tmp", "w") as fh:
                     json.dump(self.shown, fh)
@@ -221,8 +260,10 @@ def main():
     ap.add_argument("--tag", help="a person's name tags, comma separated, renamed as the AIs' FIG "
                     "cards with their level from --strength after it (Hamz 43)")
     ap.add_argument("--strength", help="smash_rl.py's strength.json, the person's level as Hamza")
-    ap.add_argument("--badges", help="with --pad and --strength, Eden draws each card's level over "
-                    "it on the character select (Badges); this file keeps what it needs")
+    ap.add_argument("--points", help="with --pad, everyone's Smash points by name, kept in this "
+                    "file (Points); each person's name tag shows theirs after a match (Hamz 12)")
+    ap.add_argument("--badges", help="with --points, Eden draws each card's points over it on the "
+                    "character select (Badges); this file keeps what it needs")
     a = ap.parse_args()
     # Started in the background, the process ignores SIGINT: both signals end it cleanly.
     def stop(*_):
@@ -290,7 +331,8 @@ def main():
             log(f"name tag {tag} is now {new}" if done else f"name tag {tag} not in the save data")
         return mtime
     tag_seen = tag_level(0) if a.tag and a.strength else None
-    badges = Badges(a.badges, a.strength, (a.tag or "").split(",")) if a.badges and a.strength and a.pad is not None else None
+    points = Points(a.points, fig_pads) if a.points and fig_pads else None
+    badges = Badges(a.badges, points) if a.badges and points else None
 
     out, path, frames, gaps, last, me = None, None, 0, 0, None, None
     matches, press_until, next_press, pressed, flags = 0, 0, -PRESS_EVERY, 0, None
@@ -360,6 +402,9 @@ def main():
                     b.unpoke("*")
                     fig_cards, kinds_until, figs_back = {}, 0, []
                 active = {i: agent(i, name) for i, name in figs.items()}
+                if points:
+                    points.start(figs, {i: t for i, t in tags.items()
+                                        if i in fighters and not fighters[i].cpu and i not in figs})
                 if me is not None and not figs:
                     for i, x in fighters.items():
                         if i != me and not x.cpu and not a.sparring and not a.selfplay:
@@ -392,6 +437,8 @@ def main():
                 log(f"match -> {path}" + "".join(f", {n} is player {i + 1}" for i, n in who.items()))
             if out is not None:
                 if fighting:
+                    if points:
+                        points.update(f, a.players)
                     out.write(line + "\n")
                     frames += 1
                     if last is not None and f.index != last + 1:
@@ -427,6 +474,10 @@ def main():
                         log("model reloaded")
                     if tag_seen is not None:
                         tag_seen = tag_level(tag_seen)
+                    for name, tag in (points.people if points and points.names else {}).items():
+                        new = amiibo.shown_name(name, points.points.get(name, 0))
+                        if smash_state.rename_tag(b, int(info[3].split("=")[1], 16), tag, new):
+                            log(f"name tag {tag} is now {new}")
                     if agents and not a.selfplay and phase() == "selfplay":
                         log(f"{a.name} beats the CPU: make the CPU a player and restart with --selfplay")
                         return

@@ -15,12 +15,13 @@ import android.view.View
 import android.view.animation.DecelerateInterpolator
 
 /**
- * A level badge the game bridge draws over the game ("badge", such as the level of a Smash card
+ * A points badge the game bridge draws over the game ("badge", such as the Smash points of a card
  * from tools/odin3/smash_record.py --badges): a gold medal in the bottom half of the view, which
- * pops and lets "+gain" rise into the top half when the level goes up.
+ * pops and lets "+gain" rise into the top half when the points go up, or "-gain" in red when
+ * they go down.
  */
 class LevelBadgeView(context: Context) : View(context) {
-    private var level = -1
+    private var level = Int.MIN_VALUE
     private var gain = 0
     private var pop = 1f // progress of the level-up animation, 1 when done
 
@@ -43,14 +44,14 @@ class LevelBadgeView(context: Context) : View(context) {
         isFocusable = false
     }
 
-    /** Shows level, with the level-up animation when it is new and gain is above 0. */
+    /** Shows level, with the animation of gain when it is new and gain is not 0. */
     fun show(level: Int, gain: Int) {
         if (level == this.level) {
             return
         }
         this.level = level
         this.gain = gain
-        if (gain > 0) {
+        if (gain != 0) {
             animator?.cancel()
             animator = ValueAnimator.ofFloat(0f, 1f).apply {
                 duration = 2200
@@ -97,9 +98,13 @@ class LevelBadgeView(context: Context) : View(context) {
 
         text.color = Color.rgb(90, 50, 0)
         text.textSize = r * 0.32f
-        canvas.drawText("NIV.", cx, cy - r * 0.3f, text)
+        canvas.drawText("PTS", cx, cy - r * 0.3f, text)
         val number = level.toString()
-        text.textSize = r * if (number.length > 2) 0.62f else 0.78f
+        text.textSize = r * when {
+            number.length > 3 -> 0.5f
+            number.length > 2 -> 0.62f
+            else -> 0.78f
+        }
         outline.textSize = text.textSize
         outline.strokeWidth = text.textSize * 0.14f
         val baseline = cy + r * 0.5f
@@ -107,16 +112,17 @@ class LevelBadgeView(context: Context) : View(context) {
         text.color = Color.WHITE
         canvas.drawText(number, cx, baseline, text)
 
-        if (pop < 1f && gain > 0) {
+        if (pop < 1f && gain != 0) {
             val rise = cy - r - pop * (height - s) * 0.9f
             val alpha = ((1f - pop * pop) * 255).toInt()
             text.textSize = s * 0.42f
             outline.textSize = text.textSize
             outline.strokeWidth = text.textSize * 0.14f
             outline.alpha = alpha
-            text.color = Color.argb(alpha, 120, 255, 90)
-            canvas.drawText("+$gain", cx, rise, outline)
-            canvas.drawText("+$gain", cx, rise, text)
+            val label = if (gain > 0) "+$gain" else "$gain"
+            text.color = if (gain > 0) Color.argb(alpha, 120, 255, 90) else Color.argb(alpha, 255, 80, 70)
+            canvas.drawText(label, cx, rise, outline)
+            canvas.drawText(label, cx, rise, text)
             outline.alpha = 255
         }
     }

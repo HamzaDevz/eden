@@ -16,8 +16,8 @@ than the value head expected, weighted by exp(advantage / beta).
                       ~/smash-ai/level, goes from 1 up to 9 each time the champion wins --wins
                       of its last --trial matches; at 9 that writes "selfplay" to ~/smash-ai/phase.
                       Each of the --ais has its own brain (smash_farm.models()), trained on its
-                      own matches; they take turns, one candidate each, the one whose turn it
-                      is named in ~/smash-ai/ai for smash_farm.py
+                      own matches; they take turns, one candidate each (Name:k for k turns in a
+                      row), the one whose turn it is named in ~/smash-ai/ai for smash_farm.py
   smash_rl.py stats   the AIs' results, most recent last
 """
 import argparse
@@ -306,9 +306,11 @@ def deploy(src, dst):
 def loop(a):
     phase = os.path.join(HOME, "phase")
     level_file, ai_file = os.path.join(HOME, "level"), os.path.join(HOME, "ai")  # also read by smash_farm.py
-    ais = a.ais.split(",")
+    # Turns in a row cost no restart of the instances, which a change of AI does (4 min of 15).
+    turns = [n for spec in a.ais.split(",") for n in [spec.partition(":")[0]] * int(spec.partition(":")[2] or 1)]
+    ais = list(dict.fromkeys(turns))
     named = open(ai_file).read().strip() if os.path.exists(ai_file) else None
-    turn = ais.index(named) if named in ais else 0  # a restarted loop goes on with the same AI
+    turn = turns.index(named) if named in turns else 0  # a restarted loop goes on with the same AI
     falls = {}  # self_destructs() of the matches measured, by path
 
     def name_next(ai):
@@ -327,7 +329,7 @@ def loop(a):
     while True:
         try:
             # Each AI has its brain, trained on its own matches: one turn each, a candidate measured.
-            a.ai = ais[turn % len(ais)]
+            a.ai = turns[turn % len(turns)]
             name_next(a.ai)
             a.out, champion = smash_farm.models(HOME, a.ai)
             a.init = champion
@@ -369,7 +371,7 @@ def loop(a):
                     log(f"{a.ai} {measure}: dropped")
                 # The next AI plays while this one's next candidate trains.
                 turn += 1
-                name_next(ais[turn % len(ais)])
+                name_next(turns[turn % len(turns)])
                 train_apart(a)
                 continue
             if (current, len(mine), len(theirs)) != waiting:  # rl.log moves while the matches come in
@@ -404,7 +406,9 @@ def main():
     ap.add_argument("--every", type=int, default=500)
     ap.add_argument("--recent", type=int, default=300, help="the AI's matches trained on")
     ap.add_argument("--ai", default="Ultimus", help="the AI trained, by its matches")
-    ap.add_argument("--ais", default="Ultimus,Optimus,Nostradamus,Magnus", help="the AIs the loop trains in turn")
+    # Ultimus first (Hamza, 1/11): 16 turns in a row of 7 min against one of 13 for each other AI, four
+    # candidates of its own for each one when they each had one in turn.
+    ap.add_argument("--ais", default="Ultimus:16,Optimus,Nostradamus,Magnus", help="the AIs the loop trains in turn")
     ap.add_argument("--trial", type=int, default=10, help="matches that measure a model")
     ap.add_argument("--wins", type=int, default=6, help="champion wins in --trial that raise the level")
     a = ap.parse_args()

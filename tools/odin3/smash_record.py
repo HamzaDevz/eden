@@ -94,6 +94,7 @@ QUIT_WITHIN = 900  # frames for the match to show its GO (it may be loading)
 TRAIN = os.path.expanduser("~/smash-ai/train")  # termux_ultimus.sh passes --auto while it exists
 LOOK_EVERY = 60
 PLACED_FOR = 180  # frames an amiibo put back stays on the reader, for Smash to scan it
+WAIT_PICK = 3  # looks a FIG card nobody knows waits for its figurine before it gets a free AI's
 AMIIBO = "/storage/emulated/0/Android/data/com.miHoYo.Yuanshen.relWithDebInfo/files/amiibo"
 KINDS_FOR = 600  # frames the FIG cards stay player cards after a + that started no match
 BACK_FOR = 3600  # frames the AIs' cards stay FIG cards after a match without the character select seen
@@ -408,9 +409,19 @@ def main():
     join_steps, next_look, seen = [], 0, None  # with --pad: a REFIG in progress, the next look
     picking, tried = None, None  # (card, controller) of the REFIG, cards it gave up on
     refig_at, refig_fails = 0, 0  # REFIG_RIGHT's path in use, its failures in a row
-    fig_cards, last_ai = {}, {}  # AIs' FIG cards, the AI each card had
+    fig_cards, last_ai, waited = {}, {}, {}  # AIs' FIG cards, the AI each card had, looks waiting
     placed, placed_until = None, 0  # an amiibo put back on the reader
     kinds_until, converted = 0, []  # the FIG cards made player cards on a + press
+    a_looked = 0  # frame before which an A that started nothing is not looked at again
+
+    def ready_banner():
+        """Whether the character select shows the banner an A starts the match from."""
+        nonlocal a_looked
+        shot = smash_farm.grab(b)
+        if shot and smash_farm.screen(shot[0], refs)[0] == "ready":
+            return True
+        a_looked = f.index + 30
+        return False
     figs_back, back_until = [], 0  # the AIs' cards made FIG cards again after a match
     next_ok, ok_until = 0, 0  # the AIs' A on the results
     next_plug = 0  # the next check of the AIs' controllers
@@ -609,13 +620,17 @@ def main():
                                 tried, refig_fails = now, 0
                         picking = None
                 elif kinds_until and f.index >= kinds_until:
+                    # No match: FIG cards again, as after one, or the game asks for their figurines.
                     for i in converted:
-                        b.unpoke(f"kind{i}")
-                        b.unpoke(f"kindcopy{i}")
-                    kinds_until = 0
-                elif count == 0 and not kinds_until and not figs_back and any(
+                        b.poke(f"kind{i}", smash_state.FIG.to_bytes(4, "little"), f"main+{smash_state.CARDS + i * smash_state.CARD_SIZE + smash_state.CARD_KIND:#x}")
+                        b.poke(f"kindcopy{i}", smash_state.FIG.to_bytes(4, "little"), f"main+{smash_state.CARD_PADS + i * smash_state.CARD_PAD_SIZE + smash_state.CARD_COPY + smash_state.CARD_KIND:#x}")
+                    figs_back, back_until, kinds_until = list(converted), f.index + BACK_FOR, 0
+                    log("no match: back to FIG cards: " + ", ".join(f"card {i + 1}" for i in figs_back))
+                elif count == 0 and not kinds_until and not figs_back and f.index >= a_looked and any(
                         p[0] & (BUTTON_PLUS | BUTTON_A) for k, p in f.pads.items()
-                        if k not in pad_figs or a.auto):  # --auto presses on the first AI's
+                        if k not in pad_figs or a.auto) and (any(
+                        p[0] & BUTTON_PLUS for k, p in f.pads.items() if k not in pad_figs or a.auto)
+                        or ready_banner()):  # an A picking a fighter starts nothing
                     # The match takes the kind and controller from both tables when it starts:
                     # player cards on the AIs' controllers, built as players, Smash's FIG AI out.
                     # Read from this frame, as + (or A on the "ready" banner) may come right after
@@ -683,6 +698,14 @@ def main():
                         p = owners.get(i, ("", -1))[1]
                         if p in pad_figs and pad_figs[p] not in seated:
                             last_ai[i] = pad_figs[p]
+                    # Any other gets the first AI on no card (in --figs order), unless someone picks
+                    # a figurine first: no picking Ultimus again after Smash or this restarted.
+                    waited = {i: waited.get(i, 0) + 1 for i in waiting - set(last_ai)}
+                    for i in sorted(waited):
+                        free = [n for n in fig_pads if n not in seated and n not in last_ai.values()]
+                        if waited[i] >= WAIT_PICK and free:
+                            last_ai[i] = free[0]
+                            log(f"card {i + 1} waits for a figurine: {free[0]}'s")
                     back = [(i, last_ai[i]) for i in sorted(waiting & set(last_ai))
                             if last_ai[i] not in seated]
                     if placed and f.index >= placed_until:

@@ -278,36 +278,21 @@ void RendererVulkan::Report() const {
     LOG_INFO(Render_Vulkan, "Available VRAM: {:.2f} GiB", available_vram);
 }
 
-vk::Buffer RendererVulkan::RenderToBuffer(std::span<const Tegra::FramebufferConfig> framebuffers,
-                                          const Layout::FramebufferLayout& layout, VkFormat format,
-                                          VkDeviceSize buffer_size) {
-    auto frame = [&]() {
-        Frame f{};
-        f.image =
-            CreateWrappedImage(memory_allocator, VkExtent2D{layout.width, layout.height}, format);
-        f.image_view = CreateWrappedImageView(device, f.image, format);
-        f.framebuffer = blit_capture.CreateFramebuffer(device, layout, *f.image_view, format);
-        return f;
-    }();
-
-    auto dst_buffer = CreateWrappedBuffer(memory_allocator, buffer_size, MemoryUsage::Download);
-    blit_capture.DrawToFrame(device, rasterizer, &frame, framebuffers, layout, 1, format);
-
-    scheduler.RequestOutsideRenderPassOperationContext();
-    scheduler.Record([&](vk::CommandBuffer cmdbuf) {
-        DownloadColorImage(cmdbuf, *frame.image, *dst_buffer,
-                           VkExtent3D{layout.width, layout.height, 1});
-    });
-
-    // Ensure the copy is fully completed before saving the capture
-    scheduler.Finish();
-
-    // Copy backing image data to the capture buffer
-    dst_buffer.Invalidate();
-    return dst_buffer;
-}
-
 void RendererVulkan::RenderScreenshot(std::span<const Tegra::FramebufferConfig> framebuffers) {
+    if (screenshot_tick != 0) {
+        // Read back once the GPU is done with the copy, without waiting for it
+        scheduler.GetMasterSemaphore().Refresh();
+        if (!scheduler.IsFree(screenshot_tick)) {
+            return;
+        }
+        screenshot_tick = 0;
+        screenshot_buffer.Invalidate();
+        std::memcpy(renderer_settings.screenshot_bits, screenshot_buffer.Mapped().data(),
+                    screenshot_buffer.Mapped().size());
+        renderer_settings.screenshot_complete_callback(false);
+        renderer_settings.screenshot_requested = false;
+        return;
+    }
     if (!renderer_settings.screenshot_requested) {
         return;
     }
@@ -316,13 +301,22 @@ void RendererVulkan::RenderScreenshot(std::span<const Tegra::FramebufferConfig> 
         framebuffers, renderer_settings.screenshot_layer_stack, screenshot_layer_scratch);
 
     const auto& layout{renderer_settings.screenshot_framebuffer_layout};
-    const auto dst_buffer = RenderToBuffer(screenshot_layers, layout, VK_FORMAT_B8G8R8A8_UNORM,
-                                           layout.width * layout.height * 4);
+    const VkDeviceSize size = VkDeviceSize{layout.width} * layout.height * 4;
+    if (!screenshot_buffer || screenshot_buffer.Mapped().size() != size) {
+        screenshot_buffer = CreateWrappedBuffer(memory_allocator, size, MemoryUsage::Download);
+    }
+    // The frame is kept between screenshots: a new one, of no size yet, made the blit idle the
+    // device and rebuild its passes for each of them.
+    scheduler.RequestOutsideRenderPassOperationContext();
+    blit_capture.DrawToFrame(device, rasterizer, &screenshot_frame, screenshot_layers, layout, 1,
+                             VK_FORMAT_B8G8R8A8_UNORM);
 
-    std::memcpy(renderer_settings.screenshot_bits, dst_buffer.Mapped().data(),
-                dst_buffer.Mapped().size());
-    renderer_settings.screenshot_complete_callback(false);
-    renderer_settings.screenshot_requested = false;
+    scheduler.RequestOutsideRenderPassOperationContext();
+    scheduler.Record([image = *screenshot_frame.image, buffer = *screenshot_buffer,
+                      extent = VkExtent3D{layout.width, layout.height, 1}](vk::CommandBuffer cmdbuf) {
+        DownloadColorImage(cmdbuf, image, buffer, extent);
+    });
+    screenshot_tick = scheduler.CurrentTick();
 }
 
 std::vector<u8> RendererVulkan::GetAppletCaptureBuffer() {

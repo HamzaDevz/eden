@@ -69,9 +69,6 @@ private:
     void EndSingleTimeCommands(VkCommandBuffer command_buffer);
     void Report() const;
 
-    vk::Buffer RenderToBuffer(std::span<const Tegra::FramebufferConfig> framebuffers,
-                              const Layout::FramebufferLayout& layout, VkFormat format,
-                              VkDeviceSize buffer_size);
     void RenderScreenshot(std::span<const Tegra::FramebufferConfig> framebuffers);
     void RenderAppletCaptureLayer(std::span<const Tegra::FramebufferConfig> framebuffers);
 
@@ -107,6 +104,11 @@ private:
     std::optional<TurboMode> turbo_mode;
 
     Frame applet_frame;
+
+    // A screenshot's frame and download buffer, its copy pending until the GPU reaches its tick
+    Frame screenshot_frame;
+    vk::Buffer screenshot_buffer;
+    u64 screenshot_tick = 0;
 };
 
 } // namespace Vulkan

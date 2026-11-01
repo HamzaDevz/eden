@@ -105,10 +105,9 @@ private:
 
     Frame applet_frame;
 
-    // A screenshot's frame and download buffer, its copy pending until the GPU reaches its tick
+    // Kept between screenshots
     Frame screenshot_frame;
     vk::Buffer screenshot_buffer;
-    u64 screenshot_tick = 0;
 };
 
 } // namespace Vulkan

@@ -279,20 +279,6 @@ void RendererVulkan::Report() const {
 }
 
 void RendererVulkan::RenderScreenshot(std::span<const Tegra::FramebufferConfig> framebuffers) {
-    if (screenshot_tick != 0) {
-        // Read back once the GPU is done with the copy, without waiting for it
-        scheduler.GetMasterSemaphore().Refresh();
-        if (!scheduler.IsFree(screenshot_tick)) {
-            return;
-        }
-        screenshot_tick = 0;
-        screenshot_buffer.Invalidate();
-        std::memcpy(renderer_settings.screenshot_bits, screenshot_buffer.Mapped().data(),
-                    screenshot_buffer.Mapped().size());
-        renderer_settings.screenshot_complete_callback(false);
-        renderer_settings.screenshot_requested = false;
-        return;
-    }
     if (!renderer_settings.screenshot_requested) {
         return;
     }
@@ -316,7 +302,15 @@ void RendererVulkan::RenderScreenshot(std::span<const Tegra::FramebufferConfig> 
                       extent = VkExtent3D{layout.width, layout.height, 1}](vk::CommandBuffer cmdbuf) {
         DownloadColorImage(cmdbuf, image, buffer, extent);
     });
-    screenshot_tick = scheduler.CurrentTick();
+
+    // Done within this frame: a game bridge client in lockstep holds the next one until it gets
+    // the screenshot.
+    scheduler.Finish();
+    screenshot_buffer.Invalidate();
+    std::memcpy(renderer_settings.screenshot_bits, screenshot_buffer.Mapped().data(),
+                screenshot_buffer.Mapped().size());
+    renderer_settings.screenshot_complete_callback(false);
+    renderer_settings.screenshot_requested = false;
 }
 
 std::vector<u8> RendererVulkan::GetAppletCaptureBuffer() {

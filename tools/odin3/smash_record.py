@@ -76,7 +76,7 @@ PICK = pick_path(13)
 # player card, under someone's name tag: the hand turns it back into its FIG card, player then CPU
 # then FIG on its label. The path holds for the first of two cards: the hand to the bottom left
 # corner, then right onto the label.
-REFIG = ([(0, -32767, -32767)] * 120 + [(0, 32767, 0)] * 30 + [(0, 0, 0)] * 10
+REFIG = ([(0, -32767, -32767)] * 120 + [(0, 32767, 0)] * 12 + [(0, 0, 0)] * 10
          + ([(BUTTON_A, 0, 0)] * PRESS_FRAMES + [(0, 0, 0)] * 30) * 2 + [(0, 0, 0)] * 20)
 LOOK_EVERY = 60
 PLACED_FOR = 180  # frames an amiibo put back stays on the reader, for Smash to scan it

@@ -167,7 +167,8 @@ class Points:
     out at the end of each match with a person's name tag and someone else named (an AI by its FIG
     card only: on a player card, it is training). 1 on 1 and in teams, each KO on a named fighter
     of another team is won from them and each fall costs (half of KO_POINTS for a fall to no one
-    named: a CPU, a teammate, the fighter itself); in a free-for-all, the KOs and the damage dealt
+    named: a CPU, a teammate, the fighter itself), but 1 on 1 a win never costs: the winner wins a
+    KO on the loser at least, from them; in a free-for-all, the KOs and the damage dealt
     to named fighters add, but a match without a KO (on anyone) costs NO_KO_POINTS instead, more
     to the stronger, less to the weaker, as KOs are worth."""
 
@@ -244,6 +245,12 @@ class Points:
             if mode != "ffa" and i in names:
                 lost = sum(now[k][1].get(i, 0) for k in now if k in names and now[k][2] != team)
                 change[names[i]] -= max(falls - lost, 0) * KO_POINTS / 2
+        if mode == "1v1" and len(names) == 2 and all(i in now for i in names):
+            w, l = sorted(names, key=lambda i: now[i][0])
+            if now[w][0] < now[l][0]:  # fewer falls: the winner
+                gap = max(worth(w, l) - change[names[w]], change[names[l]] + worth(w, l), 0)
+                change[names[w]] += gap
+                change[names[l]] -= gap
         if mode == "ffa":
             for (i, j), hurt in self.dealt.items():
                 if i in names and j in names:

@@ -85,6 +85,21 @@ def test_one_on_one_against_a_stronger_one(points):
     assert got == {"Hamz": (1_383_636, -16_364), "Bare": (1_016_364, 16_364)}
 
 
+def test_one_on_one_a_win_never_costs(points):
+    # 2/11 22:16, Hamz (Lucina) beats Bare (Ganondorf): 2 KOs each and Bare's last fall to no one.
+    # His KOs on the weaker Bare are worth less than Bare's on him, but a win earns a KO at least.
+    last = {0: (3, {1: 2}, 0), 1: (2, {0: 2}, 1)}
+    got = match(points, {}, {0: "Bare", 1: "Hamz"}, last, had={"1v1": {"Hamz": 1_032_801, "Bare": 985_474}})
+    assert got == {"Bare": (966_828, -18_646), "Hamz": (1_041_447, 8_646)}
+
+
+def test_one_on_one_a_loss_never_earns(points):
+    # Bare KOs the weaker Hamz twice, then falls 3 times on his own: Hamz wins a KO's worth still.
+    last = {0: (3, {1: 2}, 0), 1: (2, {}, 1)}
+    got = match(points, {}, {0: "Bare", 1: "Hamz"}, last, had={"1v1": {"Hamz": 600_000, "Bare": 1_000_000}})
+    assert got == {"Bare": (951_818, -48_182), "Hamz": (618_182, 18_182)}
+
+
 def test_teams(points):
     # Hamz and Bare against Ultimus and Magnus: Hamz KOs Ultimus twice, Magnus KOs Bare once,
     # Bare KOs Hamz once (his own teammate: a fall to no one).

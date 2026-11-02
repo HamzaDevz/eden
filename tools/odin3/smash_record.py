@@ -318,7 +318,8 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument("--port", type=int, default=6560)
-    ap.add_argument("--sync", type=int, default=0, help="lockstep, at most this many frames ahead")
+    ap.add_argument("--sync", type=int, default=0,
+                    help="lockstep with --auto, at most this many frames ahead")
     ap.add_argument("--out")
     ap.add_argument("--players", type=int, default=2)
     ap.add_argument("--auto", action="store_true", help="chain matches by driving the menus")
@@ -392,6 +393,8 @@ def main():
     layout = {name: [length, [f"{o:#x}" for o in offs]]
               for name, (length, offs) in {**smash_state.FIELDS, **smash_state.WORK}.items()}
     b.ask("stream 1", "ok")
+    # Lockstep makes the game wait for this script every frame: only while the Odin is the AIs'.
+    a.sync = a.sync if a.auto else 0
     if a.sync:
         b.sync(a.sync)
 
@@ -781,6 +784,9 @@ def main():
                 # their FIG cards.
                 log(f"controller input from someone else {touched}: Odin given back")
                 a.auto = False
+                if a.sync:
+                    a.sync = 0
+                    b.sync(0)
                 if os.path.exists(TRAIN):
                     os.remove(TRAIN)
                 if press_until:

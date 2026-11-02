@@ -1139,6 +1139,13 @@ void RasterizerVulkan::UpdateDynamicStates() {
 
     if (device.IsExtVertexInputDynamicStateSupported()) {
         if (auto* gp = pipeline_cache.CurrentGraphicsPipeline(); gp && gp->HasDynamicVertexInput()) {
+            // Qualcomm's driver can lose the dynamic vertex input when another pipeline is bound
+            // (black scene after Smash's KO post passes): set it again on each pipeline change.
+            if (device.GetDriverID() == VK_DRIVER_ID_QUALCOMM_PROPRIETARY &&
+                gp != vertex_input_pipeline) {
+                vertex_input_pipeline = gp;
+                maxwell3d->dirty.flags[Dirty::VertexInput] = true;
+            }
             UpdateVertexInput(regs);
         } else if (gp) {
             // A static vertex input pipeline invalidates the dynamic one: set it again on the

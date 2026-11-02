@@ -229,6 +229,7 @@ private:
     boost::container::static_vector<VkSampler, MAX_TEXTURES> sampler_handles;
 
     u32 draw_counter = 0;
+    const GraphicsPipeline* vertex_input_pipeline = nullptr;
 };
 
 } // namespace Vulkan

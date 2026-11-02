@@ -7,40 +7,47 @@ import android.animation.ValueAnimator
 import android.content.Context
 import android.graphics.Canvas
 import android.graphics.Color
-import android.graphics.LinearGradient
 import android.graphics.Paint
+import android.graphics.Path
 import android.graphics.RectF
-import android.graphics.Shader
 import android.graphics.Typeface
 import android.view.View
-import android.view.animation.DecelerateInterpolator
+import android.view.animation.LinearInterpolator
 import java.util.Locale
+import kotlin.math.PI
+import kotlin.math.min
+import kotlin.math.roundToLong
+import kotlin.math.sin
 
 /**
  * A points badge the game bridge draws over the game ("badge", such as the Smash points of a card
- * from tools/odin3/smash_record.py --badges): a gold plate with its label (the mode) over the
- * number in the bottom half of the view, which pops and lets "+gain" rise into the top half when
- * the points go up, or "-gain" in red when they go down.
+ * from tools/odin3/smash_record.py --badges): a dark pill side high with its label and the points,
+ * against the right edge of the view. On a card it swells when the points change and lets the
+ * change rise above it with an arrow, green up or red down; as a row (the results) it slides in,
+ * counts up to the new points and keeps the change beside them.
  */
 class LevelBadgeView(context: Context) : View(context) {
     private var level = Long.MIN_VALUE
     private var gain = 0L
     private var label = ""
-    private var pop = 1f // progress of the change animation, 1 when done
+    private var row = false
+    private var side = 1f
+    private var t = 1f // progress of the change animation, 1 when done
 
-    private val plate = Paint(Paint.ANTI_ALIAS_FLAG)
+    private val fill = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.argb(225, 14, 16, 28) }
     private val rim = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE }
-    private val glow = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.rgb(255, 214, 90) }
+    private val chip = Paint(Paint.ANTI_ALIAS_FLAG)
+    private val arrow = Paint(Paint.ANTI_ALIAS_FLAG)
     private val text = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        textAlign = Paint.Align.CENTER
         typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
     }
     private val outline = Paint(text).apply {
         style = Paint.Style.STROKE
         strokeJoin = Paint.Join.ROUND
-        color = Color.rgb(60, 30, 0)
+        color = Color.argb(230, 0, 0, 0)
     }
     private val box = RectF()
+    private val path = Path()
     private var animator: ValueAnimator? = null
 
     init {
@@ -48,10 +55,12 @@ class LevelBadgeView(context: Context) : View(context) {
         isFocusable = false
     }
 
-    /** Shows level under label, with the animation of gain when it is new and gain is not 0. */
-    fun show(level: Long, gain: Long, label: String) {
-        if (label != this.label) {
+    /** Shows level under label, a row on the results or a card's badge, side its pill's height. */
+    fun show(level: Long, gain: Long, label: String, row: Boolean, side: Int) {
+        if (label != this.label || row != this.row || side.toFloat() != this.side) {
             this.label = label
+            this.row = row
+            this.side = side.toFloat()
             invalidate()
         }
         if (level == this.level) {
@@ -59,13 +68,13 @@ class LevelBadgeView(context: Context) : View(context) {
         }
         this.level = level
         this.gain = gain
-        if (gain != 0L) {
+        if (row || gain != 0L) {
             animator?.cancel()
             animator = ValueAnimator.ofFloat(0f, 1f).apply {
-                duration = 3500
-                interpolator = DecelerateInterpolator()
+                duration = if (row) 2200 else 3200
+                interpolator = LinearInterpolator()
                 addUpdateListener {
-                    pop = it.animatedValue as Float
+                    t = it.animatedValue as Float
                     invalidate()
                 }
                 start()
@@ -79,66 +88,166 @@ class LevelBadgeView(context: Context) : View(context) {
         super.onDetachedFromWindow()
     }
 
-    /** Text size for s at most size high and width wide. */
-    private fun fit(s: String, size: Float, width: Float): Float {
-        text.textSize = size
-        val w = text.measureText(s)
-        return if (w > width) size * width / w else size
+    private fun points(n: Long) = String.format(Locale.FRANCE, "%,d", n)
+
+    private fun change() = when {
+        gain > 0 -> "+" + points(gain)
+        gain < 0 -> "−" + points(-gain)
+        else -> "±0"
     }
 
-    private fun drawOutlined(canvas: Canvas, s: String, x: Float, y: Float, size: Float, color: Int, alpha: Int = 255) {
+    private fun changeColor(alpha: Int) = when {
+        gain > 0 -> Color.argb(alpha, 92, 232, 110)
+        gain < 0 -> Color.argb(alpha, 255, 86, 76)
+        else -> Color.argb(alpha, 190, 190, 200)
+    }
+
+    private fun width(s: String, size: Float): Float {
         text.textSize = size
-        outline.textSize = size
-        outline.strokeWidth = size * 0.16f
-        outline.alpha = alpha
-        canvas.drawText(s, x, y, outline)
+        return text.measureText(s)
+    }
+
+    /** s from x on the line through y (its middle), outlined when outlined is not 0. */
+    private fun draw(canvas: Canvas, s: String, x: Float, y: Float, size: Float, color: Int, outlined: Float = 0f) {
+        text.textSize = size
+        val base = y - (text.ascent() + text.descent()) / 2
+        if (outlined > 0f) {
+            outline.textSize = size
+            outline.strokeWidth = size * outlined
+            outline.alpha = Color.alpha(color)
+            canvas.drawText(s, x, base, outline)
+        }
         text.color = color
-        canvas.drawText(s, x, y, text)
-        outline.alpha = 255
+        canvas.drawText(s, x, base, text)
+    }
+
+    /** The arrow of the change, size high, centered on x, y, up for a gain. */
+    private fun drawArrow(canvas: Canvas, x: Float, y: Float, size: Float, color: Int) {
+        val h = size * 0.5f
+        val w = size * 0.6f
+        val dir = if (gain > 0) -1f else 1f
+        path.reset()
+        path.moveTo(x, y + dir * h)
+        path.lineTo(x - w, y - dir * h)
+        path.lineTo(x + w, y - dir * h)
+        path.close()
+        arrow.color = color
+        canvas.drawPath(path, arrow)
+    }
+
+    /** The arrow and change, size high, from x on the line through y; its width. */
+    private fun drawChange(canvas: Canvas?, x: Float, y: Float, size: Float, alpha: Int, outlined: Boolean): Float {
+        val s = change()
+        val a = if (gain != 0L) size * 0.9f else 0f
+        if (canvas != null) {
+            if (gain != 0L) {
+                if (outlined) {
+                    drawArrow(canvas, x + a / 2, y, size * 0.82f, Color.argb(alpha, 0, 0, 0))
+                }
+                drawArrow(canvas, x + a / 2, y, size * 0.62f, changeColor(alpha))
+            }
+            draw(canvas, s, x + a + size * 0.08f, y, size, changeColor(alpha), if (outlined) 0.18f else 0f)
+        }
+        return a + size * 0.08f + width(s, size)
+    }
+
+    private fun drawPill(canvas: Canvas, left: Float, cy: Float, w: Float) {
+        val s = side
+        box.set(left, cy - s / 2, left + w, cy + s / 2)
+        canvas.drawRoundRect(box, s / 2, s / 2, fill)
+        rim.strokeWidth = s * 0.07f
+        rim.color = Color.rgb(247, 181, 41)
+        canvas.drawRoundRect(box, s / 2, s / 2, rim)
     }
 
     override fun onDraw(canvas: Canvas) {
-        val w = width.toFloat()
-        val h = height / 2f // the plate's half
-        val cx = w / 2
-        val cy = height - h / 2
-        // A quick swell then back to size over the first fifth of the animation
-        val swell = if (pop < 1f) 1f + 0.25f * kotlin.math.sin(Math.PI * (pop * 5).coerceAtMost(1f)).toFloat() else 1f
-        val pw = w * 0.47f * swell
-        val ph = h * 0.42f * swell
+        if (row) drawRow(canvas) else drawCard(canvas)
+    }
 
-        if (pop < 1f) {
-            glow.alpha = ((1f - pop) * 150).toInt()
-            val g = 1.1f + pop * 0.3f
-            box.set(cx - pw * g, cy - ph * g, cx + pw * g, cy + ph * g)
-            canvas.drawRoundRect(box, ph * g * 0.5f, ph * g * 0.5f, glow)
+    private fun drawCard(canvas: Canvas) {
+        val s = side
+        val number = points(level)
+        val pad = s * 0.42f
+        val gap = if (label.isEmpty()) 0f else s * 0.26f
+        var k = 1f
+        val content = width(label, s * 0.36f) + gap + width(number, s * 0.56f)
+        val room = width - s * 0.25f - 2 * pad
+        if (content > room) {
+            k = room / content
         }
-        box.set(cx - pw, cy - ph, cx + pw, cy + ph)
-        plate.shader = LinearGradient(
-            cx, cy - ph, cx, cy + ph,
-            intArrayOf(Color.rgb(255, 238, 150), Color.rgb(247, 181, 41), Color.rgb(176, 105, 8)),
-            null, Shader.TileMode.CLAMP
-        )
-        val corner = ph * 0.45f
-        canvas.drawRoundRect(box, corner, corner, plate)
-        rim.strokeWidth = ph * 0.08f
-        rim.color = Color.rgb(90, 50, 0)
-        canvas.drawRoundRect(box, corner, corner, rim)
+        val w = content * k + 2 * pad
+        val cy = height - s * 0.62f
+        val right = width - s * 0.12f
+        val cx = right - w / 2
 
+        // A quick swell then back to size over the first sixth of the animation
+        val swell = if (t < 1f) 1f + 0.14f * sin(PI * min(t * 6, 1f)).toFloat() else 1f
+        canvas.save()
+        canvas.scale(swell, swell, cx, cy)
+        drawPill(canvas, right - w, cy, w)
+        var x = right - w + pad
         if (label.isNotEmpty()) {
-            text.color = Color.rgb(90, 50, 0)
-            text.textSize = fit(label, ph * 0.5f, pw * 1.6f)
-            canvas.drawText(label, cx, cy - ph * 0.3f, text)
+            draw(canvas, label, x, cy, s * 0.36f * k, Color.rgb(255, 205, 80))
+            x += width(label, s * 0.36f * k) + gap * k
         }
-        val number = String.format(Locale.FRANCE, "%,d", level)
-        drawOutlined(canvas, number, cx, cy + ph * 0.62f, fit(number, ph * 0.95f, pw * 1.8f), Color.WHITE)
+        draw(canvas, number, x, cy, s * 0.56f * k, Color.WHITE)
+        canvas.restore()
 
-        if (pop < 1f && gain != 0L) {
-            val rise = cy - ph - pop * h * 0.75f
-            val alpha = ((1f - pop * pop) * 255).toInt()
-            val change = (if (gain > 0) "+" else "") + String.format(Locale.FRANCE, "%,d", gain)
-            val color = if (gain > 0) Color.argb(alpha, 120, 255, 90) else Color.argb(alpha, 255, 80, 70)
-            drawOutlined(canvas, change, cx, rise, fit(change, h * 0.4f, w * 0.98f), color, alpha)
+        if (t < 1f && gain != 0L) {
+            val size = s * 0.5f
+            val from = cy - s * 0.95f
+            val y = from - t * (from - size * 0.7f)
+            val alpha = ((1f - t * t) * 255).toInt()
+            val cw = drawChange(null, 0f, 0f, size, alpha, true)
+            drawChange(canvas, (cx - cw / 2).coerceAtMost(width - cw), y, size, alpha, true)
         }
     }
+
+    private fun drawRow(canvas: Canvas) {
+        val s = side
+        // Slides in over the first fifth, counts up to the new points over the first two thirds,
+        // and the change comes in after a quarter
+        val enter = ease(min(t * 5, 1f))
+        val count = ease(min(t * 1.5f, 1f))
+        val late = ease(((t - 0.25f) * 4).coerceIn(0f, 1f))
+        val final = points(level)
+        val number = points(level - gain + (gain * count).roundToLong())
+        val pad = s * 0.42f
+        val gap = s * 0.3f
+        val chipPad = s * 0.2f
+        val numberSize = s * 0.56f
+        val changeSize = s * 0.46f
+        val right = width - s * 0.05f + (1f - enter) * s * 1.5f
+        val left = right - (width - s * 0.1f)
+        val cy = height / 2f
+
+        // Columns the rows share: the name, the points ending where the change starts, which is
+        // wide enough for most
+        val cw = drawChange(null, 0f, 0f, changeSize, 255, false) + 2 * chipPad
+        val column = maxOf(cw, changeSize * 0.98f + width(points(88888) + "+", changeSize) + 2 * chipPad)
+        val chipLeft = right - s * 0.14f - column
+        val numberRight = chipLeft - gap
+        val room = numberRight - width(final, numberSize) - gap - (left + pad)
+        val nameSize = s * 0.42f * (room / width(label, s * 0.42f).coerceAtLeast(1f)).coerceIn(0.4f, 1f)
+
+        canvas.saveLayerAlpha(0f, 0f, width.toFloat(), height.toFloat(), (enter * 255).toInt())
+        drawPill(canvas, left, cy, right - left)
+        draw(canvas, label, left + pad, cy, nameSize, Color.rgb(255, 205, 80))
+        // The points end at the same place while they count up
+        draw(canvas, number, numberRight - width(number, numberSize), cy, numberSize, Color.WHITE)
+        if (late > 0f) {
+            val alpha = (late * 255).toInt()
+            chip.color = changeColor((late * 70).toInt())
+            val ch = s * 0.74f
+            box.set(chipLeft, cy - ch / 2, chipLeft + cw, cy + ch / 2)
+            canvas.drawRoundRect(box, ch / 2, ch / 2, chip)
+            // The arrow lands with a small bounce in its direction
+            val bounce = if (gain == 0L) 0f else
+                (if (gain > 0) -1f else 1f) * s * 0.12f * (1f - late) * sin(PI * late * 2).toFloat()
+            drawChange(canvas, chipLeft + chipPad, cy + bounce, changeSize, alpha, false)
+        }
+        canvas.restore()
+    }
+
+    private fun ease(x: Float) = 1f - (1f - x) * (1f - x) * (1f - x)
 }

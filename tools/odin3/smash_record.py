@@ -121,16 +121,24 @@ def phase():
 
 
 # The open cards share the bottom of the character select, left of its buttons, from this height
-# (per mille of the frame): a level badge goes on the top right corner of a card's portrait.
+# (per mille of the frame): a points badge goes in the top right corner of a card's portrait.
 CARDS_RIGHT, CARDS_TOP = 956, 633
 
 
 def badge_place(rank, n):
-    """Center and size (per mille of the frame width, y of its height) of the badge of the rank-th
-    of n open cards."""
+    """Right end, middle and height (per mille of the frame width, the middle of its height) of
+    the badge of the rank-th of n open cards."""
     w = CARDS_RIGHT / n
-    size = round(min(max(w * 0.3, 45), 80))
-    return round(w * rank + min(w * 0.7, w - size * 0.95)), round(CARDS_TOP + size * 16 / 9 * 0.55), size
+    size = round(min(w * 0.16, 22))
+    return round(w * (rank + 1) - size * 0.3), round(CARDS_TOP + size * 16 / 9 * 0.7), size
+
+
+ROW_SIZE = 26  # the results' rows of points, down the top right corner
+
+
+def row_place(k):
+    """Right end, middle and height of the k-th row of points on the results."""
+    return 985, round(75 + k * ROW_SIZE * 16 / 9 * 1.35), ROW_SIZE
 
 
 def base(nick):
@@ -145,7 +153,7 @@ def base(nick):
 # SPREAD points apart, the stronger is expected to score 10 KOs for 1.
 START, KO_POINTS, SPREAD = 1_000_000, 20_000, 400_000
 DAMAGE_POINTS = 100  # in a free-for-all, for each % dealt to someone of the same points
-MODES = {"1v1": "1v1", "teams": "EQUIPES", "ffa": "FFA"}  # Points' modes and their badge labels
+MODES = {"1v1": "1v1", "teams": "ÉQUIPES", "ffa": "FFA"}  # Points' modes and their badge labels
 
 
 def mode_of(fighters, teams=False):
@@ -249,11 +257,13 @@ class Badges:
     """--badges: on the character select, Eden draws the Smash points (Points) of the mode its
     rules make over each card that has a name, an AI's FIG card by its nickname and a player card
     by its name tag, popping with what they won or lost since they were last shown there (the
-    file keeps those)."""
+    file keeps those); on the results, a row each with what the match won or lost them."""
 
     def __init__(self, path, points):
         self.path, self.points, self.sent = os.path.expanduser(path), points, set()
         self.labels = False  # whether Eden takes a badge's label, older ones refuse the badge with it
+        self.rows = False  # whether it draws the results' rows, older ones refuse them
+        self.board, self.board_sent = {}, 0  # Points.finish() of the last match, its rows shown
         try:
             with open(self.path) as fh:
                 self.shown = json.load(fh)
@@ -290,6 +300,18 @@ class Badges:
         for i in self.sent - set(wanted or {}):
             b.badge(i)
         self.sent = set(wanted or {})
+
+    def results(self, b, on):
+        """The rows of the last match's points (board) while on, best change first, else off for
+        good."""
+        rows = sorted(self.board.items(), key=lambda e: -e[1][1]) if on and self.rows else []
+        for k, (name, (n, gain)) in enumerate(rows):
+            b.badge(f"r{k}", *row_place(k), n, gain, name.replace(" ", "\u00a0"), row=True)
+        for k in range(len(rows), self.board_sent):
+            b.badge(f"r{k}")
+        self.board_sent = len(rows)
+        if not on:
+            self.board = {}
 
 
 def main():
@@ -394,8 +416,9 @@ def main():
     points = Points(a.points, fig_pads) if a.points and fig_pads else None
     badges = Badges(a.badges, points) if a.badges and points else None
     if badges:
-        badges.labels = b.ask("badge labels 1 1 1 0 0 x", "ok").startswith("ok")
-        b.badge("labels")
+        badges.rows = b.ask("badge probe 1 1 1 0 0 x row", "ok").startswith("ok")
+        badges.labels = badges.rows or b.ask("badge probe 1 1 1 0 0 x", "ok").startswith("ok")
+        b.badge("probe")
 
     out, path, frames, gaps, last, me = None, None, 0, 0, None, None
     matches, press_until, next_press, pressed, flags = 0, 0, -PRESS_EVERY, 0, None
@@ -424,6 +447,7 @@ def main():
         return False
     figs_back, back_until = [], 0  # the AIs' cards made FIG cards again after a match
     next_ok, ok_until = 0, 0  # the AIs' A on the results
+    next_board = 0  # the next sending of the results' rows of points
     next_plug = 0  # the next check of the AIs' controllers
     quit_until, quit_steps, quit_pad, quit_check = 0, [], None, 0  # QUIT wanted, in progress
     idle, no_door = 0, 0  # with --challengers, presses since the last fight, looks with no door
@@ -548,7 +572,9 @@ def main():
                     if tag_seen is not None:
                         tag_seen = tag_level(tag_seen)
                     if points:  # the points go on the badges only: the tags keep the bare names
-                        points.finish()
+                        scored = points.finish()
+                        if badges:
+                            badges.board = scored
                         for name, tag in points.people.items():
                             if smash_state.rename_tag(b, int(info[3].split("=")[1], 16), tag, name):
                                 log(f"name tag {tag} is now {name}")
@@ -588,6 +614,10 @@ def main():
                 for i, ag in active.items():
                     if i in fighters:
                         b.pad(pads[i], *ag.act(fighters))
+
+            if badges and badges.board and f.index >= next_board:
+                badges.results(b, bool(result) and count >= 2)
+                next_board = f.index + LOOK_EVERY // 2
 
             # The results wait for an A from every player, the AIs' too (their player cards still
             # hold their controllers there).

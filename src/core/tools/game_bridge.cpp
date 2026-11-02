@@ -27,10 +27,11 @@
 //                                     long as the client takes (resumed when it disconnects)
 //   step <frames> [height]            runs <frames> frames then pauses -> the shot of the next
 //                                     frame, or ok step <frame> without a height
-//   badge <id> <x> <y> <size> <points> <gain> [label]  a points badge for the frontend to draw
-//                                     over the game, centered at x, y and size high (per mille of
-//                                     the 16:9 frame), gain showing what it won or lost; kept 2 s
-//                                     unless sent again -> ok badge. badge <id|*> - takes it off
+//   badge <id> <x> <y> <size> <points> <gain> [label [row]]  a points badge for the frontend to
+//                                     draw over the game, ending at x on y and size high (per
+//                                     mille of the 16:9 frame), gain showing what it won or lost,
+//                                     as a row of the results with "row"; kept 2 s unless sent
+//                                     again -> ok badge. badge <id|*> - takes it off
 // Each composited frame: f <frame> <time us> [p <index> <buttons> <lx> <ly> <rx> <ry>]...
 //                        [w <id> <hex|->]...
 
@@ -438,10 +439,12 @@ private:
                 badges.erase(args[1]);
             }
             Send("ok badge\n");
-        } else if (command == "badge" && (args.size() == 7 || args.size() == 8)) {
-            const auto line = fmt::format("{} {} {} {} {} {} {}", args[1], ParseU64(args[2]),
+        } else if (command == "badge" && args.size() >= 7 && args.size() <= 9 &&
+                   (args.size() < 9 || args[8] == "row")) {
+            const auto line = fmt::format("{} {} {} {} {} {} {}{}", args[1], ParseU64(args[2]),
                                           ParseU64(args[3]), ParseU64(args[4]), ParseS64(args[5]),
-                                          ParseS64(args[6]), args.size() == 8 ? args[7] : "");
+                                          ParseS64(args[6]), args.size() >= 8 ? args[7] : "",
+                                          args.size() == 9 ? " row" : "");
             std::scoped_lock lock{badges_mutex};
             badges[args[1]] = {line, std::chrono::steady_clock::now() + BadgeLife};
             Send("ok badge\n");

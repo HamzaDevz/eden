@@ -1533,26 +1533,29 @@ class EmulationFragment : Fragment(), SurfaceHolder.Callback {
         for (line in lines.lineSequence()) {
             val fields = line.split(' ')
             val numbers = fields.drop(1).take(5).mapNotNull { it.toLongOrNull() }
-            if (fields.size !in 6..7 || numbers.size != 5) {
+            if (fields.size !in 6..8 || numbers.size != 5) {
                 continue
             }
             val (x, y, size, level, gain) = numbers
+            val row = fields.getOrElse(7) { "" } == "row"
             val side = (size * surface.width / 1000).toInt().coerceAtLeast(1)
-            // A plate under its label, almost twice as wide as it is high
-            val wide = side * 9 / 5
+            // A card's pill with room above it for the change to rise into, a row long enough
+            // for a name, the points and the change
+            val wide = if (row) side * 38 / 5 else side * 26 / 5
+            val high = if (row) side * 13 / 10 else side * 13 / 5
             val view = badgeViews.getOrPut(fields[0]) {
-                LevelBadgeView(requireContext()).also { b.gameBadges.addView(it, wide, side * 2) }
+                LevelBadgeView(requireContext()).also { b.gameBadges.addView(it, wide, high) }
             }
-            if (view.layoutParams.width != wide) {
+            if (view.layoutParams.width != wide || view.layoutParams.height != high) {
                 view.layoutParams = view.layoutParams.apply {
                     width = wide
-                    height = side * 2
+                    height = high
                 }
             }
-            // The plate is the bottom half of the view, centered on x, y
-            view.x = surface.x + x * surface.width / 1000f - wide / 2f
-            view.y = surface.y + y * surface.height / 1000f - side * 1.5f
-            view.show(level, gain, fields.getOrElse(6) { "" })
+            // The pill ends at x, on y: a row's in the middle of the view, a card's at its bottom
+            view.x = surface.x + x * surface.width / 1000f - wide
+            view.y = surface.y + y * surface.height / 1000f - if (row) high / 2f else high - side * 0.62f
+            view.show(level, gain, fields.getOrElse(6) { "" }, row, side)
             shown += fields[0]
         }
         for (id in badgeViews.keys - shown) {

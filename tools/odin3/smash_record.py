@@ -153,6 +153,7 @@ def base(nick):
 # SPREAD points apart, the stronger is expected to score 10 KOs for 1.
 START, KO_POINTS, SPREAD = 1_000_000, 20_000, 400_000
 DAMAGE_POINTS = 100  # in a free-for-all, for each % dealt to someone of the same points
+NO_KO_POINTS = 100_000  # in a free-for-all, what a match without a KO costs among equals
 MODES = {"1v1": "1v1", "teams": "ÉQUIPES", "ffa": "FFA"}  # Points' modes and their badge labels
 
 
@@ -163,10 +164,12 @@ def mode_of(fighters, teams=False):
 
 class Points:
     """--points: everyone's Smash points by name and mode (MODES), an AI's or a name tag's, worked
-    out at the end of each match with a person's name tag and someone else named. 1 on 1 and in
-    teams, each KO on a named fighter of another team is won from them and each fall costs (half
-    of KO_POINTS for a fall to no one named: a CPU, a teammate, the fighter itself); in a
-    free-for-all, the KOs and the damage dealt to named fighters only add."""
+    out at the end of each match with a person's name tag and someone else named (an AI by its FIG
+    card only: on a player card, it is training). 1 on 1 and in teams, each KO on a named fighter
+    of another team is won from them and each fall costs (half of KO_POINTS for a fall to no one
+    named: a CPU, a teammate, the fighter itself); in a free-for-all, the KOs and the damage dealt
+    to named fighters add, but a match without a KO (on anyone) costs NO_KO_POINTS instead, more
+    to the stronger, less to the weaker, as KOs are worth."""
 
     def __init__(self, path, ais):
         self.path = os.path.expanduser(path)
@@ -198,7 +201,8 @@ class Points:
         """A match of ais and people's tags ({fighter: name}): counted with one of each at least,
         or with two people."""
         names = {i: self.key(n) for i, n in {**tags, **ais}.items() if n}
-        self.people = {names[i]: base(n) for i, n in tags.items() if n and i not in ais}
+        names = {i: n for i, n in names.items() if i in ais or n not in self.ais}
+        self.people = {names[i]: base(n) for i, n in tags.items() if i in names and i not in ais}
         self.names = names if self.people and len(names) > 1 else {}
         self.last, self.dealt, self.damage = {}, {}, {}
 
@@ -244,6 +248,12 @@ class Points:
             for (i, j), hurt in self.dealt.items():
                 if i in names and j in names:
                     change[names[i]] += hurt * DAMAGE_POINTS * worth(i, j) / (KO_POINTS / 2)
+            for i in names:
+                others = [j for j in names if j != i and j in now]
+                if i in now and others and not any(n for j, n in now[i][1].items() if j != i):
+                    # Its expected share of the KOs against the others, a half among equals.
+                    expected = sum(worth(j, i) for j in others) / len(others) / KO_POINTS
+                    change[names[i]] = -2 * NO_KO_POINTS * expected
         out = {}
         for name, d in change.items():
             new = max(round(had[name] + d), 0)

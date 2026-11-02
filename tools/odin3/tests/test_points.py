@@ -42,11 +42,32 @@ def test_free_for_all_of_1_11_at_23_45(points):
         "Bare": (1_026_705, 26_705), "Hamz": (1_066_157, 66_157)}
 
 
-def test_free_for_all_only_adds(points):
-    # Hamz falls 3 times (once to Bare, once to a CPU, once on his own) and scores nothing.
+def test_free_for_all_without_a_ko(points):
+    # Hamz falls 3 times (once to Bare, once to a CPU, once on his own) and KOs no one: whatever
+    # damage he dealt, it costs him NO_KO_POINTS between equals.
     last = {0: (3, {}, 0), 1: (0, {0: 1}, 1), 2: (0, {0: 1}, 2)}
-    assert match(points, {}, {0: "Hamz", 1: "Bare"}, last) == {
-        "Hamz": (1_000_000, 0), "Bare": (1_010_000, 10_000)}
+    assert match(points, {}, {0: "Hamz", 1: "Bare"}, last, {(0, 1): 200}) == {
+        "Hamz": (900_000, -100_000), "Bare": (1_010_000, 10_000)}
+
+
+def test_free_for_all_without_a_ko_by_level(points):
+    # 400,000 points apart, the stronger was expected to score 10 KOs for 1.
+    last = {0: (1, {}, 0), 1: (1, {}, 1), 2: (0, {0: 1, 1: 1}, 2)}
+    got = match(points, {}, {0: "Hamz", 1: "Bare"}, last, had={"ffa": {"Hamz": 1_400_000, "Bare": 1_000_000}})
+    assert got == {"Hamz": (1_218_182, -181_818), "Bare": (981_818, -18_182)}
+
+
+def test_free_for_all_without_a_ko_among_several(points):
+    # Against one 400,000 stronger and one 400,000 weaker, as against equals.
+    last = {0: (1, {}, 0), 1: (0, {0: 1}, 1), 2: (0, {}, 2), 3: (0, {2: 1}, 3)}
+    got = match(points, {2: "Ultimus"}, {0: "Hamz", 1: "Bare"}, last,
+                had={"ffa": {"Bare": 1_400_000, "Ultimus": 600_000}})
+    assert got["Hamz"] == (900_000, -100_000)
+
+
+def test_free_for_all_a_ko_on_a_cpu_is_a_ko(points):
+    last = {0: (1, {2: 1}, 0), 1: (0, {0: 1}, 1), 2: (1, {}, 2)}
+    assert match(points, {}, {0: "Hamz", 1: "Bare"}, last, {(0, 1): 50})["Hamz"] == (1_005_000, 5_000)
 
 
 def test_one_on_one_between_equals(points):
@@ -89,6 +110,7 @@ def test_never_under_zero(points):
     ({}, {0: "Hamz"}),                       # one person against CPUs
     ({0: "Ultimus", 1: "Magnus"}, {}),       # AIs alone
     ({}, {0: "Hamz", 1: ""}),                # someone without a name tag
+    ({}, {0: "Hamz", 1: "Ultimus"}),         # an AI alone on a player card: training
 ])
 def test_not_counted(points, ais, tags):
     assert match(points, ais, tags, {0: (1, {1: 1}, 0), 1: (1, {0: 1}, 1)}) == {}

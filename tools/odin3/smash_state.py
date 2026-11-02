@@ -62,6 +62,9 @@ TEAM = (4, (*ACC, 0xd8, 0x10))  # TeamModule: team number, each fighter's own ou
 # The DamageLog of the DamageModule (damage_log() adds 0x80), the last hit taken: s32 object_id_ of
 # what dealt it, then owner_object_id_ (the fighter of a projectile), named by its table's keys.
 HIT_BY = (8, (*ACC, 0xa8, 0x100))
+# The log keeps its last hit while damage comes from elsewhere (~1 % with no one near, on 1/11): a
+# fighter's own hit from farther than this (in stage units, real hits at 40 at most) is no one's.
+REACH = 100
 TEAM_BATTLE = 0x52c51e8  # byte, 1 with team battles in the rules, on the character select too
 
 # WorkModule arrays (table 0 instance, 1 status): floats, ints (8-byte stride), flag words.
@@ -180,7 +183,12 @@ def damage(frame, players):
         hurt, hit = frame.watches.get(f"{i}dmg"), frame.watches.get(f"{i}hitby")
         if hurt and len(hurt) == 4 and hit and len(hit) == HIT_BY[0]:
             obj, owner = struct.unpack("<2I", hit)
-            out[i] = struct.unpack("<f", hurt)[0], ids.get(obj, ids.get(owner))
+            by = ids.get(obj, ids.get(owner))
+            here, there = frame.watches.get(f"{i}pos"), by is not None and frame.watches.get(f"{by}pos")
+            if obj in ids and here and there and \
+                    math.dist(struct.unpack_from("<ff", here), struct.unpack_from("<ff", there)) > REACH:
+                by = None
+            out[i] = struct.unpack("<f", hurt)[0], by
     return out
 
 def tag_name(bridge, main, record):

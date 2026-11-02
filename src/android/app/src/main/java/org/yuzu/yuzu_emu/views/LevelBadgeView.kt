@@ -217,21 +217,23 @@ class LevelBadgeView(context: Context) : View(context) {
         val chipPad = s * 0.2f
         val numberSize = s * 0.56f
         val changeSize = s * 0.46f
-        val right = width - s * 0.05f + (1f - enter) * s * 1.5f
-        val left = right - (width - s * 0.1f)
         val cy = height / 2f
 
         // Columns the rows share: the name, the points ending where the change starts, which is
-        // wide enough for most
+        // wide enough for most; a longer name makes its row longer
         val cw = drawChange(null, 0f, 0f, changeSize, 255, false) + 2 * chipPad
         val column = maxOf(cw, changeSize * 0.98f + width(points(88888) + "+", changeSize) + 2 * chipPad)
+        val tail = gap + width(final, numberSize) + gap + column + s * 0.14f
+        val w = (pad + width(label, s * 0.42f) + tail).coerceIn(s * 7.4f, width - s * 0.1f)
+        val right = width - s * 0.05f + (1f - enter) * s * 1.5f
+        val left = right - w
         val chipLeft = right - s * 0.14f - column
         val numberRight = chipLeft - gap
-        val room = numberRight - width(final, numberSize) - gap - (left + pad)
+        val room = w - pad - tail
         val nameSize = s * 0.42f * (room / width(label, s * 0.42f).coerceAtLeast(1f)).coerceIn(0.4f, 1f)
 
         canvas.saveLayerAlpha(0f, 0f, width.toFloat(), height.toFloat(), (enter * 255).toInt())
-        drawPill(canvas, left, cy, right - left)
+        drawPill(canvas, left, cy, w)
         draw(canvas, label, left + pad, cy, nameSize, Color.rgb(255, 205, 80))
         // The points end at the same place while they count up
         draw(canvas, number, numberRight - width(number, numberSize), cy, numberSize, Color.WHITE)

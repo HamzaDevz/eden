@@ -1541,7 +1541,7 @@ class EmulationFragment : Fragment(), SurfaceHolder.Callback {
             val side = (size * surface.width / 1000).toInt().coerceAtLeast(1)
             // A card's pill with room above it for the change to rise into, a row long enough
             // for a name, the points and the change
-            val wide = if (row) side * 38 / 5 else side * 26 / 5
+            val wide = if (row) side * 10 else side * 26 / 5
             val high = if (row) side * 13 / 10 else side * 13 / 5
             val view = badgeViews.getOrPut(fields[0]) {
                 LevelBadgeView(requireContext()).also { b.gameBadges.addView(it, wide, high) }

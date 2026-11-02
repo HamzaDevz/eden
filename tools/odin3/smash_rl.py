@@ -252,7 +252,10 @@ def show_levels(res, ais):
     s = {p: round(v, 2) for p, v in fit_levels(games).items()}
     with open(os.path.join(HOME, "strength.json.tmp"), "w") as f:
         json.dump(s, f)
-    os.replace(os.path.join(HOME, "strength.json.tmp"), os.path.join(HOME, "strength.json"))
+    try:
+        os.replace(os.path.join(HOME, "strength.json.tmp"), os.path.join(HOME, "strength.json"))
+    except PermissionError:
+        pass  # Windows: pcsync is reading it; the next round writes it again
     for ai in ais:
         shown = set()
         for path in glob.glob(os.path.join(smash_farm.ROOT, "*", "amiibo", f"{ai}.bin")) if ai in s else []:

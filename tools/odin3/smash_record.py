@@ -214,11 +214,14 @@ class Points:
             if was is not None and hurt > was and by in now and by != j:
                 self.dealt[by, j] = self.dealt.get((by, j), 0) + hurt - was
 
-    def finish(self):
+    def finish(self, results=True):
         """The points of the match start() began, from its last KOs and damage: {name: (points,
-        change)}, saved."""
+        change)}, saved. None for a match quit before its results, as in Smash."""
         names, now, self.names = self.names, self.last, {}
         if not names or len(now) < 2:
+            return {}
+        if not results:
+            log("match quit before its results: no points")
             return {}
         teams = [team for _, _, team in now.values()]
         mode = mode_of(len(now), len(set(teams)) < len(teams))
@@ -575,7 +578,7 @@ def main():
                     if tag_seen is not None:
                         tag_seen = tag_level(tag_seen)
                     if points:  # the points go on the badges only: the tags keep the bare names
-                        scored = points.finish()
+                        scored = points.finish(results=bool(result))
                         if badges:
                             badges.board = scored
                         for name, tag in points.people.items():

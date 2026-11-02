@@ -411,6 +411,8 @@ void EmulationSession::UnPauseEmulation() {
 void EmulationSession::HaltEmulation() {
     std::scoped_lock lock(m_mutex);
     m_is_running = false;
+    // A stop during the boot's shader build must not wait for the whole cache to compile.
+    m_load_stop.request_stop();
     m_cv.notify_one();
 }
 
@@ -418,13 +420,15 @@ void EmulationSession::RunEmulation() {
     {
         std::scoped_lock lock(m_mutex);
         m_is_running = true;
+        m_load_stop = std::stop_source{};
     }
 
     // Load the disk shader cache.
     if (Settings::values.use_disk_shader_cache.GetValue()) {
         LoadDiskCacheProgress(VideoCore::LoadCallbackStage::Prepare, 0, 0);
         m_system.Renderer().ReadRasterizer()->LoadDiskResources(
-            m_system.GetApplicationProcessProgramID(), std::stop_token{}, LoadDiskCacheProgress);
+            m_system.GetApplicationProcessProgramID(), m_load_stop.get_token(),
+            LoadDiskCacheProgress);
         LoadDiskCacheProgress(VideoCore::LoadCallbackStage::Complete, 0, 0);
     }
 
@@ -477,7 +481,7 @@ void EmulationSession::ReloadDiskShaderCache(u64 program_id) {
     m_system.GPU().ObtainContext();
 
     LoadDiskCacheProgress(VideoCore::LoadCallbackStage::Prepare, 0, 0);
-    m_system.Renderer().ReadRasterizer()->LoadDiskResources(program_id, std::stop_token{},
+    m_system.Renderer().ReadRasterizer()->LoadDiskResources(program_id, m_load_stop.get_token(),
                                                             LoadDiskCacheProgress);
     LoadDiskCacheProgress(VideoCore::LoadCallbackStage::Complete, 0, 0);
 

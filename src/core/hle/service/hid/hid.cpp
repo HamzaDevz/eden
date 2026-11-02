@@ -92,7 +92,7 @@ void LoopProcess(Core::System& system) {
 
     server_manager->RegisterNamedService("xcd:sys", std::make_shared<XCD_SYS>(system));
 
-    system.RunServer(std::move(server_manager));
+    ServerManager::RunServer(std::move(server_manager));
 }
 
 } // namespace Service::HID

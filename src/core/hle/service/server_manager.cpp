@@ -131,6 +131,10 @@ ServerManager::~ServerManager() {
 
 void ServerManager::RunServer(std::unique_ptr<ServerManager>&& server_manager) {
     server_manager->m_system.RunServer(std::move(server_manager));
+    // Refused during shutdown: its loop never ran, so its destructor must not wait for it.
+    if (server_manager) {
+        server_manager->m_stopped.Set();
+    }
 }
 
 Result ServerManager::RegisterSession(Kernel::KServerSession* server_session,

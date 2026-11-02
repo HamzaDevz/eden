@@ -133,6 +133,7 @@ struct KernelCore::Impl {
         is_shutting_down.store(true, std::memory_order_relaxed);
         SCOPE_EXIT {
             is_shutting_down.store(false, std::memory_order_relaxed);
+            servers_closed = false;
         };
 
         CloseServices();
@@ -206,9 +207,16 @@ struct KernelCore::Impl {
     }
 
     void CloseServices() {
-        // Ensures all servers gracefully shutdown.
-        std::scoped_lock lk{server_lock};
-        server_managers.clear();
+        // Ensures all servers gracefully shutdown. They are destroyed outside the lock: a service
+        // still booting on the service core waits for it in RunServer, and the servers need that
+        // core to stop.
+        std::vector<std::unique_ptr<Service::ServerManager>> managers;
+        {
+            std::scoped_lock lk{server_lock};
+            servers_closed = true;
+            managers = std::exchange(server_managers, {});
+        }
+        managers.clear();
     }
 
     void InitializePhysicalCores() {
@@ -798,6 +806,7 @@ struct KernelCore::Impl {
 
     std::mutex server_lock;
     std::vector<std::unique_ptr<Service::ServerManager>> server_managers;
+    bool servers_closed{};
 
     std::array<std::optional<Kernel::PhysicalCore>, Core::Hardware::NUM_CPU_CORES> cores;
 
@@ -1004,7 +1013,7 @@ void KernelCore::RunServer(std::unique_ptr<Service::ServerManager>&& server_mana
 
     {
         std::scoped_lock lk{impl->server_lock};
-        if (impl->is_shutting_down) {
+        if (impl->is_shutting_down || impl->servers_closed) {
             return;
         }
 

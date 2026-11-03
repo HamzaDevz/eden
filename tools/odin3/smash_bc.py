@@ -102,7 +102,7 @@ def mutate(style, rng, genes=2):
     """style with genes of its offsets moved one step up or down."""
     style = dict(style or {})
     for k in rng.choice(sorted(GENES), genes, replace=False):
-        style[k] = round(style.get(k, 0) + GENES[k][0] * rng.choice((-1, 1)), 3)
+        style[str(k)] = round(float(style.get(k, 0) + GENES[k][0] * rng.choice((-1, 1))), 3)
     return style
 
 
@@ -446,7 +446,7 @@ def load(path):
     inputs start unused, so the model plays as before until training weighs them."""
     if path.endswith(".npz"):
         return NumpyPolicy(path)
-    checkpoint = torch.load(path, map_location="cpu")
+    checkpoint = torch.load(path, map_location="cpu", weights_only=False)  # our own files, styles saved as numpy before
     model, state = Policy(), checkpoint["state"]
     w = state["inp.0.weight"]
     if w.shape[1] == model.inp[0].in_features - SIGHT:

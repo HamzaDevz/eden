@@ -378,7 +378,7 @@ def train_apart(a):
 
 
 def version(path):
-    return torch.load(path, map_location="cpu").get("version") if os.path.exists(path) else None
+    return torch.load(path, map_location="cpu", weights_only=False).get("version") if os.path.exists(path) else None
 
 
 def deploy(src, dst):

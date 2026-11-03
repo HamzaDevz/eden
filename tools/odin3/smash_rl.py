@@ -298,7 +298,7 @@ def show_levels(res, ais):
         pass  # Windows: pcsync is reading it; the next round writes it again
     for ai in ais:
         shown = set()
-        for path in glob.glob(os.path.join(smash_farm.ROOT, "*", "amiibo", f"{ai}.bin")) if ai in s else []:
+        for path in glob.glob(os.path.join(smash_farm.ROOT, "*", "amiibo", f"{amiibo.shown(ai)}.bin")) if ai in s else []:
             try:
                 levels = amiibo.set_level(path, s[ai])
             except OSError:  # Eden reading it: next time

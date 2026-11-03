@@ -76,10 +76,24 @@ def shown_name(name, n):
     return f"{name[:9 - len(str(n))]} {n}"
 
 
+# The name a FIG goes by, on its card and in Eden's amiibo list (its file's), when not its AI's: the
+# AI keeps its own for its brain, matches, level and points, so Hamza renames FIGs at will (3/11).
+SHOWN = {"Mac": "Big Mac"}
+
+
+def shown(ai):
+    return SHOWN.get(ai, ai)
+
+
+def ai_of(name):
+    """The AI whose FIG goes by name (shown())."""
+    return next((ai for ai, s in SHOWN.items() if s == name), name)
+
+
 def named(nick, names):
-    """The one of names whose FIG shows nick (shown_name()), else nick."""
+    """The one of names whose FIG shows nick (shown_name(), shown()), else nick."""
     base = nick.rsplit(" ", 1)[0] if nick.rsplit(" ", 1)[-1].isdigit() else None
-    return next((n for n in names if n[:10] == nick or base and n.startswith(base)), nick)
+    return next((n for n in names if shown(n)[:10] == nick or base and shown(n).startswith(base)), nick)
 
 
 def with_level(data, name, lv):
@@ -120,7 +134,7 @@ if __name__ == "__main__":
         with open(sys.argv[2]) as f:
             levels = json.load(f)
         for path in sys.argv[3:]:
-            name = os.path.splitext(os.path.basename(path))[0]
+            name = ai_of(os.path.splitext(os.path.basename(path))[0])
             if name in levels and set_level(path, levels[name]):
                 print(path)
     else:

@@ -793,7 +793,7 @@ def main():
                     if placed and f.index >= placed_until:
                         b.amiibo()
                         placed = None
-                    elif back and not placed and b.amiibo(os.path.join(a.amiibo, f"{back[0][1]}.bin")):
+                    elif back and not placed and b.amiibo(os.path.join(a.amiibo, f"{amiibo.shown(back[0][1])}.bin")):
                         placed, placed_until = back[0][1], f.index + PLACED_FOR
                         log(f"{placed}'s amiibo back on the reader for card {back[0][0] + 1}")
                     # A player card on an AI's controller: never the AI's, back to its FIG card

@@ -170,6 +170,17 @@ def mode_of(fighters, teams=False):
     return "1v1" if fighters == 2 else "teams" if teams else "ffa"
 
 
+def global_levels(points, names=()):
+    """Everyone's level over all modes, AIs and people on one scale (Hamza, 3/11): the mean of their
+    points in the modes they played, START being 50 and each KO_POINTS more a level; names that
+    played none at 50."""
+    out = {}
+    for n in {n for table in points.values() for n in table} | set(names):
+        mine = [table[n] for table in points.values() if n in table] or [START]
+        out[n] = round(sum(mine) / len(mine) / KO_POINTS, 2)
+    return out
+
+
 class Points:
     """--points: everyone's Smash points by name and mode (MODES), an AI's or a name tag's, worked
     out at the end of each match with a person's name tag and someone else named (an AI by its FIG
@@ -194,6 +205,14 @@ class Points:
             self.points.setdefault(mode, {})
         self.ais = list(ais)
         self.names, self.people, self.last, self.dealt, self.damage = {}, {}, {}, {}, {}
+        self.save_levels()
+
+    def save_levels(self):
+        """global_levels() in levels.json next to the points, which ultimus.sh puts on the FIGs."""
+        path = os.path.join(os.path.dirname(self.path), "levels.json")
+        with open(path + ".tmp", "w") as fh:
+            json.dump(global_levels(self.points, self.ais), fh)
+        os.replace(path + ".tmp", path)
 
     def of(self, mode, name):
         return self.points[mode].get(name, START)
@@ -277,6 +296,7 @@ class Points:
         with open(self.path + ".tmp", "w") as fh:
             json.dump(self.points, fh)
         os.replace(self.path + ".tmp", self.path)
+        self.save_levels()
         log(f"points {mode}: " + ", ".join(f"{n} {p:,} ({d:+,})" for n, (p, d) in out.items()))
         return out
 

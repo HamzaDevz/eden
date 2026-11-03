@@ -189,3 +189,13 @@ def test_damage_with_no_one_near_is_no_ones():
 
 def test_damage_from_afar_through_a_projectile():
     assert smash_state.damage(hit_frame(0, 150, through_object=True), 2)[1] == (12, 0)
+
+
+def test_global_level_from_every_mode(points):
+    points.points["1v1"].update({"Hamz": 1_100_000})
+    points.points["ffa"].update({"Hamz": 1_060_000, "Bare": 1_240_000})
+    points.save_levels()
+    with open(os.path.join(os.path.dirname(points.path), "levels.json")) as fh:
+        levels = json.load(fh)
+    assert levels["Hamz"] == 54.0 and levels["Bare"] == 62.0
+    assert all(levels[ai] == 50.0 for ai in AIS)  # no match against people yet

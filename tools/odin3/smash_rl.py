@@ -281,8 +281,8 @@ def performance(m):
 
 def show_levels(res, ais):
     """Each AI's level from its level_games(), as its FIG's: in its amiibo on every instance here, and in
-    HOME/strength.json, which pcsync.sh and ultimus.sh carry to the Odin's (amiibo.with_level()).
-    Hamza's level is there too."""
+    HOME/strength.json, with Hamza's. The Odin's FIGs show the level of their Smash points instead
+    (smash_record.global_levels(), 3/11)."""
     games = []
     for ai in ais:
         cpu, hamza = level_games(res, ai)

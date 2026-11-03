@@ -133,7 +133,8 @@ def focused_batch(seqs, hot, size, length, rng, device):
     return [torch.cat(p) for p in zip(parts, more)]
 
 
-Match = collections.namedtuple("Match", "path won score level version me measured name person")
+Match = collections.namedtuple("Match", "path won score level version me measured name person stats",
+                               defaults=(None,))
 
 
 def player(header):
@@ -146,6 +147,12 @@ def player(header):
 def person(d, me, rows):
     """Whether the AI played someone (Hamza, on the Odin) rather than a CPU."""
     return not d["cpu"][rows[-1]][1 - me]
+
+
+def match_stats(d, me, rows):
+    """Damage the AI dealt and took over the match, and its length in seconds, for performance()."""
+    dmg, frames = d["damage"][rows], d["frame"][rows]
+    return [float(gain(dmg[:, 1 - me]).sum()), float(gain(dmg[:, me]).sum()), float(frames[-1] - frames[0]) / 60]
 
 
 def result(path):
@@ -163,13 +170,14 @@ def result(path):
     mine, theirs = (stock[me], -damage[me]), (stock[1 - me], -damage[1 - me])
     score = reward({k: d[k][rows] for k in ("damage", "stock")}, me).sum()
     return (bool(mine > theirs), float(score), header.get("level") or 9, header.get("version"), int(me),
-            *player(header), bool(person(d, me, rows)))
+            *player(header), bool(person(d, me, rows)), match_stats(d, me, rows))
 
 
-def results(folder):
+def results(folder, ais=()):
     """Each match an AI played alone against the CPU or someone, oldest first: result, total reward,
     CPU level (9 when the recorder was not told), model version, whether the game waited for the
-    agent (the PC) or not (the Odin, its pads a little late), the AI and whether it played someone."""
+    agent (the PC) or not (the Odin, its pads a little late), the AI, whether it played someone and
+    its match_stats(): read again for those of the ais' level_games() kept without them."""
     # Decoding all 16 000 matches took the loop 50 min between two models: a saved match no
     # longer changes, its result is kept in results.json (once a minute old, the Odin's arrive
     # by scp under their final name).
@@ -185,7 +193,7 @@ def results(folder):
     for path in smash_dataset.recordings(folder):
         name = os.path.basename(path)
         r = known[name] if name in known else result(path)
-        if r and len(r) < len(Match._fields) - 1:  # kept before the AI's name and opponent: read again
+        if r and len(r) < 8:  # kept before the AI's name and opponent: read again
             with gzip.open(path, "rt") as f:
                 measured, ai = player(json.loads(f.readline()[2:]))
             d = None if measured else smash_dataset.load(path)  # a CPU of the level the PC set
@@ -196,6 +204,13 @@ def results(folder):
             known[name], fresh = r, True
         if r:
             out.append(Match(path, *r))
+    need = {m.path for ai in ais for m in sum(level_games(out, ai), []) if m.stats is None}
+    for i, m in enumerate(out):
+        if m.path in need:
+            d = smash_dataset.load(m.path)
+            out[i] = m._replace(stats=match_stats(d, m.me, d["valid"].all(1).nonzero()[0]))
+            if os.path.basename(m.path) in known:
+                known[os.path.basename(m.path)], fresh = list(out[i])[1:], True
     if fresh:
         known["win"] = WIN
         with open(index + ".tmp", "w") as f:
@@ -210,15 +225,22 @@ def current_level():
 
 
 # Levels on the scale of Smash's FIG cards, a CPU k at the level its table gives it (CPU 9 at 44),
-# open above 50: SCALE levels more make the odds of a win ten times better. When the AIs went up a CPU
-# level their odds fell by a factor 10 every 3.6 to 40 levels, 6 from CPU 8 to 9 (their results on 1/11).
-SCALE = 6
+# open above 50: SCALE levels more make the odds of a better performance() ten times better. When the
+# AIs went up a CPU level their odds of a win fell by a factor 10 every 3.6 to 40 levels, 6 from CPU 8
+# to 9 (their results on 1/11); a performance's log-odds are 0.35 to 0.6 times its win's (8 AIs against
+# CPU 9 on 3/11): 6 / 0.4.
+SCALE = 15
+# The true level (Hamza, 3/11): the wins, but also dealing damage without taking any, which is spacing,
+# and dealing it fast. PACE is the damage a minute a CPU 9 dealt the AIs (91 to 112 on 3/11).
+PERFORMANCE = dict(won=0.4, spacing=0.4, speed=0.2)
+PACE = 105
 CPU_LEVEL = {k + 1: amiibo.xp_level(xp) for k, xp in enumerate(amiibo.CPU_XP)}
 
 
 def fit_levels(games, steps=50):
-    """Each player's level from games (a, b, won): a an AI, b an AI, Hamza or a CPU's level (int),
-    one win and one loss each against a CPU 9 keeping those of few games near it."""
+    """Each player's level from games (a, b, won): a an AI, b an AI, Hamza or a CPU's level (int), won
+    a's share of a win (performance()), one win and one loss each against a CPU 9 keeping those of few
+    games near it."""
     c = math.log(10) / SCALE
     players = {a for a, _, _ in games} | {b for _, b, _ in games if isinstance(b, str)}
     lv = dict.fromkeys(players, float(CPU_LEVEL[9]))
@@ -238,15 +260,33 @@ def fit_levels(games, steps=50):
     return lv
 
 
+def level_games(res, ai):
+    """ai's last 100 matches measured against a CPU, and its last 50 against Hamza."""
+    mine = [m for m in res if m.name == ai]
+    return [m for m in mine if m.measured][-100:], [m for m in mine if m.person][-50:]
+
+
+def performance(m):
+    """m's outcome in [0, 1] for fit_levels: PERFORMANCE's mix of its win, its share of the damage
+    dealt, and the pace of its damage against PACE's; its win alone when kept without match_stats()."""
+    if m.stats is None:
+        return float(m.won)
+    dealt, taken, seconds = m.stats
+    share = dealt / (dealt + taken) if dealt + taken else 0.5
+    pace = dealt * 60 / max(seconds, 1)
+    w = PERFORMANCE
+    return w["won"] * m.won + w["spacing"] * share + w["speed"] * pace / (pace + PACE)
+
+
 def show_levels(res, ais):
-    """Each AI's level from its last 100 matches measured against a CPU and its last 50 against Hamza,
-    as its FIG's: in its amiibo on every instance here, and in HOME/strength.json, which pcsync.sh and
-    ultimus.sh carry to the Odin's (amiibo.with_level()). Hamza's level is there too."""
+    """Each AI's level from its level_games(), as its FIG's: in its amiibo on every instance here, and in
+    HOME/strength.json, which pcsync.sh and ultimus.sh carry to the Odin's (amiibo.with_level()).
+    Hamza's level is there too."""
     games = []
     for ai in ais:
-        mine = [m for m in res if m.name == ai]
-        games += [(ai, m.level, m.won) for m in [m for m in mine if m.measured][-100:]]
-        games += [(ai, "Hamza", m.won) for m in [m for m in mine if m.person][-50:]]
+        cpu, hamza = level_games(res, ai)
+        games += [(ai, m.level, performance(m)) for m in cpu]
+        games += [(ai, "Hamza", performance(m)) for m in hamza]
     if not games:
         return
     s = {p: round(v, 2) for p, v in fit_levels(games).items()}
@@ -376,7 +416,7 @@ def loop(a):
             a.init = champion
             level = current_level()
             # Models are measured on the PC only: the Odin's matches train them but play by other rules.
-            res = results(a.play)
+            res = results(a.play, ais)
             show_levels(res, ais)
             res = [m for m in res if m.level == level and m.measured and m.name == a.ai]
             best, current = version(champion), version(a.out)

@@ -34,3 +34,16 @@ def test_level_follows_the_performance():
     better = smash_rl.fit_levels([("AI", 9, 0.8)] * 50)["AI"]
     assert even == pytest.approx(smash_rl.CPU_LEVEL[9], abs=0.1)
     assert better > even + 3
+
+
+def test_style_moves_the_rules_within_bounds():
+    import numpy as np
+    import smash_bc
+    rng = np.random.default_rng(0)
+    style = {}
+    for _ in range(200):
+        style = smash_bc.mutate(style, rng)
+    f = smash_bc.styled(0x34, style)
+    assert len(style) > 2
+    assert all(lo <= f[k] <= hi for k, (_, lo, hi) in smash_bc.GENES.items())
+    assert smash_bc.styled(0x34, None)["reach"] == smash_bc.FIGHTERS[0x34]["reach"]

@@ -57,9 +57,10 @@ FOCUS = 0.5
 WIN = 3
 # A stock lost with no hit taken in the 4 s before: Ultimus fell on its own. The champion of
 # 01:14 on 31/10 measured better than the one before by dealing more, yet fell so twice as
-# often (0.37 a match against 0.17): in the measure of a model, each such fall costs a stock more.
+# often (0.37 a match against 0.17): in the measure of a model, each such fall costs a tenth of
+# a win more.
 UNHIT = 240
-SELF_DESTRUCT = 1
+FALL = 0.1
 # An attack or special the other fighter does not feel within WHIFF_WINDOW frames costs WHIFF:
 # a landed smash was worth a lot and a missed one nothing, so Ultimus swung in the void.
 WHIFF = 0.03
@@ -358,11 +359,12 @@ def train(a):
             log(f"step {step} imitation {imitation.mean().item():.3f} value {vloss.item():.4f} "
                 f"weight max {w.max().item():.1f} {time.time() - start:.0f} s")
     os.makedirs(os.path.dirname(a.out), exist_ok=True)
+    style = smash_bc.mutate(model.style, rng)
     tmp = a.out + ".tmp"
     torch.save({"state": model.state_dict(), "delay": smash_bc.DELAY, "matches": len(rec) + len(play),
-                "step": a.steps, "init": init, "version": time.strftime("%Y%m%d-%H%M%S")}, tmp)
+                "step": a.steps, "init": init, "version": time.strftime("%Y%m%d-%H%M%S"), "style": style}, tmp)
     os.replace(tmp, a.out)  # the recorder reloads it between matches
-    log(f"saved {a.out}")
+    log(f"saved {a.out}, style {style}")
 
 
 def train_apart(a):
@@ -427,7 +429,8 @@ def loop(a):
             for m in mine + theirs:
                 if m.path not in falls:
                     falls[m.path] = self_destructs(m.path, m.me)
-            score = lambda ms: sum(m.score - SELF_DESTRUCT * falls[m.path] for m in ms) / len(ms)
+            # The true level decides (3/11): wins, spacing and speed.
+            score = lambda ms: sum(performance(m) - FALL * falls[m.path] for m in ms) / len(ms)
             fell = lambda ms: sum(falls[m.path] for m in ms) / len(ms)
             if len(theirs) >= a.trial and sum(m.won for m in theirs[-a.trial:]) >= a.wins:
                 if level < 9:

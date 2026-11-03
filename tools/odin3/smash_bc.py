@@ -13,6 +13,7 @@ Agent also plays without torch (on the console, in Termux) from a numpy copy of 
   smash_bc.py npz --model ~/smash-ai/models/ultimus.pt --out ~/smash-ai/models/ultimus.npz
 """
 import argparse
+import json
 import os
 import time
 
@@ -77,6 +78,32 @@ FIGHTERS = {
     0x34: dict(reach=0.95, shot=None, up_b=-15, hop=False, smash_at=80, aim=False),  # Little Mac
     0x0f: dict(reach=1.25, shot=None, up_b=-30, hop=True, smash_at=80, aim=False),  # Bowser
 }
+# The rest of the rules' distances and timings, the same for all: shield_at, how close an attack
+# raises the shield; poke_wait, frames between pokes; approach_at and approach_wait, from how far and
+# how often it rushes in; dash, how often a run ends in a dash attack.
+PLAY = dict(poke_wait=12, approach_at=35, approach_wait=20, dash=0.6, shield_at=22)
+# What training changes (3/11): each AI's style, offsets from its fighter's values above kept in its
+# model, two of them moved by a step on each candidate (mutate()), which the loop keeps when it plays
+# better (smash_rl.performance()). Gene: (step, lowest, highest).
+GENES = dict(reach=(0.05, 0.8, 1.6), smash_at=(10, 40, 140), up_b=(5, -60, -5), poke_wait=(3, 3, 40),
+             approach_at=(5, 20, 60), approach_wait=(4, 4, 50), dash=(0.15, 0.0, 1.0), shield_at=(3, 10, 35))
+
+
+def styled(kind, style):
+    """The values the rules play fighter kind with, under an AI's style."""
+    f = {**PLAY, **FIGHTERS.get(kind, FIGHTERS[0])}
+    for k, v in (style or {}).items():
+        if k in GENES:
+            f[k] = min(max(f[k] + v, GENES[k][1]), GENES[k][2])
+    return f
+
+
+def mutate(style, rng, genes=2):
+    """style with genes of its offsets moved one step up or down."""
+    style = dict(style or {})
+    for k in rng.choice(sorted(GENES), genes, replace=False):
+        style[k] = round(style.get(k, 0) + GENES[k][0] * rng.choice((-1, 1)), 3)
+    return style
 
 
 def fighter_features(d, i, sign):
@@ -164,6 +191,7 @@ class NumpyPolicy:
     def __init__(self, path):
         self.w = dict(np.load(path))
         self.version = str(self.w.pop("version")) if "version" in self.w else None
+        self.style = json.loads(str(self.w.pop("style"))) if "style" in self.w else {}
 
     def step(self, cont, cat, prev_stick, prev_buttons, h):
         w, sigmoid = self.w, lambda v: 1 / (1 + np.exp(-v))
@@ -306,7 +334,7 @@ class Agent:
             return press(A | ZR)  # the shield took a hit up close: grab out of it
         if dx < 22 and -10 < dy < 18 and o.status in GRAB:
             return press(ZR, 0.0, -1.0)  # spot dodge the grab
-        if dx < 22 and -10 < dy < 20 and attacking and me.shield > 15:
+        if dx < f["shield_at"] and -10 < dy < 20 and attacking and me.shield > 15:
             return ZR, 0.0, 0.0
         o_off = abs(o.x) > EDGE + 5 or o.y < -5 and abs(o.x) > 50 and o.situation == 2
         if o_off or o.situation == 1:
@@ -331,7 +359,7 @@ class Agent:
             if dodging:
                 return 0, 0.0, 0.0  # intangible: wait for the dodge to end
             if 5 < dy and dx < 12 and not self.wait:
-                self.wait = 12
+                self.wait = f["poke_wait"]
                 return press(A, 0.0, 0.45)  # up tilt
             if not facing:
                 return 0, side * 0.3, 0.0  # turn around first
@@ -339,7 +367,7 @@ class Agent:
                 return press(A | ZR) if dx < 14 else (0, side * 0.5, 0.0)  # grab beats shield
             # Hamza found it not aggressive enough waiting 45 frames between pokes (31/10).
             if not self.wait and grounded:
-                self.wait = 12
+                self.wait = f["poke_wait"]
                 r = self.rng.random()
                 if o.damage > f["smash_at"] and abs(dy) < 8 and dx < 14 and r < 0.4:
                     return smash(side, 0.0)
@@ -358,11 +386,11 @@ class Agent:
                 return 0, side * 0.3, 0.0
             if not self.fire:
                 return shoot(40)
-        elif dx < 35 and not self.wait and not dodging:
-            self.wait = 20
+        elif dx < f["approach_at"] and not self.wait and not dodging:
+            self.wait = f["approach_wait"]
             # Only a run makes A a dash attack: standing, v4's came out as tilts and smashes
             # 25 or more away.
-            if grounded and facing and me.status in RUNNING and self.rng.random() < 0.6:
+            if grounded and facing and me.status in RUNNING and self.rng.random() < f["dash"]:
                 return press(A | ZR if o.status in SHIELD else A, float(side), 0.0)  # dash attack or dash grab
             if f["hop"]:
                 return press(X, side * 0.6, 0.0)  # short hop in: the air rules take it
@@ -397,7 +425,7 @@ class Agent:
             self.buttons[0] = 0.0
             if self.stick != [BINS // 2] * 2:
                 self.buttons[1] = 0.0
-        self.f = FIGHTERS.get(me.kind, FIGHTERS[0])
+        self.f = styled(me.kind, getattr(self.model, "style", None))
         back = self.recover(me, prev.get(self.me, me)) or self.rules(me, o, prev.get(self.me, me), prev.get(other, o))
         if back:
             mask, lx, ly = back
@@ -425,6 +453,7 @@ def load(path):
         state["inp.0.weight"] = torch.cat([w[:, :CONT], w.new_zeros(len(w), SIGHT), w[:, CONT:]], 1)
     model.load_state_dict(state, strict=False)
     model.version = checkpoint.get("version")  # set by smash_rl.py, which compares versions
+    model.style = checkpoint.get("style") or {}
     return model.eval()
 
 
@@ -516,6 +545,7 @@ def npz(a):
     arrays = {k: v.numpy() for k, v in model.state_dict().items()}
     if model.version is not None:
         arrays["version"] = np.array(str(model.version))
+    arrays["style"] = np.array(json.dumps(model.style))
     with open(a.out + ".part", "wb") as f:
         np.savez(f, **arrays)
     os.replace(a.out + ".part", a.out)

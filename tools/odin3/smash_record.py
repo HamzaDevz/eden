@@ -465,10 +465,12 @@ def main():
     join_steps, next_look, seen = [], 0, None  # with --pad: a REFIG in progress, the next look
     picking, tried = None, None  # (card, controller) of the REFIG (card None: a DROP), cards it gave up on
     empty_seen = 0  # looks the last card was a player card without a fighter
-    refig_at, refig_fails = 0, 0  # REFIG_RIGHT's path in use, its failures in a row
+    # REFIG_RIGHT's path in use, its failures in a row. The PC's first: its A off the label landed
+    # on the "ready" banner and started a match without the AI after each restart (3/11).
+    refig_at, refig_fails = (1 if sys.platform == "win32" else 0), 0
     fig_cards, last_ai, waited = {}, {}, {}  # AIs' FIG cards, the AI each card had, looks waiting
     placed, placed_until = None, 0  # an amiibo put back on the reader
-    kinds_until, converted = 0, []  # the FIG cards made player cards on a + press
+    kinds_until, kinds_last, converted = 0, 0, []  # the FIG cards made player cards on a + press
     a_looked = 0  # frame before which an A that started nothing is not looked at again
 
     def ready_banner():
@@ -479,6 +481,11 @@ def main():
             return True
         a_looked = f.index + 30
         return False
+
+    def loading():
+        """Whether the screen is black, as between the character select and the stage."""
+        shot = smash_farm.grab(b)
+        return bool(shot) and smash_farm.screen(shot[0], refs)[0] == "dark"
     figs_back, back_until = [], 0  # the AIs' cards made FIG cards again after a match
     next_ok, ok_until = 0, 0  # the AIs' A on the results
     next_board = 0  # the next sending of the results' rows of points
@@ -685,6 +692,10 @@ def main():
                             if refig_fails >= len(REFIG_RIGHT):  # every path failed: until the cards change
                                 tried, refig_fails = now, 0
                         picking = None
+                elif kinds_until and f.index >= kinds_until and f.index < kinds_last and loading():
+                    # The PC, uncapped, loads the stage in more frames than KINDS_FOR: FIG cards
+                    # again there had Smash's FIG AI play the match (3/11, Ganon's first).
+                    kinds_until = f.index + LOOK_EVERY
                 elif kinds_until and f.index >= kinds_until:
                     # No match: FIG cards again, as after one, or the game asks for their figurines.
                     for i in converted:
@@ -719,7 +730,7 @@ def main():
                                             (f"levelcopy{i}", smash_state.CARD_PADS + i * smash_state.CARD_PAD_SIZE + smash_state.CARD_COPY)):
                                 b.poke(pid, bytes([a.cpu_level]), f"main+{at + smash_state.CARD_LEVEL:#x}")
                     if converted:
-                        kinds_until = f.index + KINDS_FOR
+                        kinds_until, kinds_last = f.index + KINDS_FOR, f.index + BACK_FOR
                         log("+: " + ", ".join(f"card {i + 1} is {n}'s" for i, n in converted.items()))
                 elif count == 0 and figs_back and f.index >= next_look:
                     # Let go once the character select shows them: it writes the kinds itself.

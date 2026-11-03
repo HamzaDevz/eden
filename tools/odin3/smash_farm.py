@@ -318,9 +318,12 @@ class Instance:
             b.sock.close()
 
     def wanted_ai(self):
-        """The AI smash_rl.py trains now (HOME\\ai), the first of --figs before it named one."""
-        path = os.path.join(self.a.home, "ai")
-        return open(path).read().strip() if os.path.exists(path) else self.a.figs.split(",")[0]
+        """The AI smash_rl.py trains now (HOME\\ai), the first of --figs before it named one;
+        HOME\\ai-<k> keeps instance k on one, for a test (as cpu-level-<k>)."""
+        for path in (os.path.join(self.a.home, f"ai-{self.k}"), os.path.join(self.a.home, "ai")):
+            if os.path.exists(path):
+                return open(path).read().strip()
+        return self.a.figs.split(",")[0]
 
     def wanted_level(self):
         path = os.path.join(self.a.home, "level")
@@ -344,6 +347,10 @@ class Instance:
             figs = [self.ai] + [n for n in self.a.figs.split(",") if n != self.ai]
             mode += ["--players", "8", "--pad", str(FIG_PAD), "--figs", ",".join(figs),
                      "--amiibo", os.path.join(self.dir, "amiibo")]
+        cpu_level = os.path.join(self.a.home, f"cpu-level-{self.k}")
+        if self.ai and os.path.exists(cpu_level):  # Smash's CPU past level 9, kept out of training
+            mode += ["--cpu-level", open(cpu_level).read().strip(),
+                     "--out", os.path.join(self.a.home, "cpulevel")]
         phase = os.path.join(self.a.home, "phase")
         if not self.cpu and os.path.exists(phase) and open(phase).read().strip() == "selfplay":
             mode += ["--selfplay"]  # else the recorder stops after each match in that phase
@@ -364,7 +371,7 @@ def main():
                     help="instances where CPU plays against CPU, into HOME\\rec")
     ap.add_argument("--champion", type=int, nargs="*", default=[0],
                     help="instances where Ultimus plays the champion instead of the candidate")
-    ap.add_argument("--figs", default="Ultimus,Optimus,Nostradamus,Magnus", help="the AIs play their FIG cards as on the Odin (Ultimus,...), "
+    ap.add_argument("--figs", default="Ultimus,Ganon,Link,Zelda,Mac,Bowser", help="the AIs play their FIG cards as on the Odin (Ultimus,...), "
                     "from ROOT\\k\\amiibo")
     ap.add_argument("--every", type=int, default=1800, help="restart after this many seconds")
     ap.add_argument("--idle", type=int, default=900, help="restart when nothing was saved for this long")

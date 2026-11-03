@@ -449,7 +449,7 @@ def main():
     ap.add_argument("--ai", default="Ultimus", help="the AI trained, by its matches")
     # Ultimus first (Hamza, 1/11): 16 turns in a row of 7 min against one of 13 for each other AI, four
     # candidates of its own for each one when they each had one in turn.
-    ap.add_argument("--ais", default="Ultimus:16,Optimus,Nostradamus,Magnus", help="the AIs the loop trains in turn")
+    ap.add_argument("--ais", default="Ultimus,Ganon,Link,Zelda,Mac,Bowser", help="the AIs the loop trains in turn")
     ap.add_argument("--trial", type=int, default=10, help="matches that measure a model")
     ap.add_argument("--wins", type=int, default=6, help="champion wins in --trial that raise the level")
     a = ap.parse_args()

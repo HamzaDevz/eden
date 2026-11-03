@@ -14,7 +14,7 @@ while true; do
     # (from 1,000,000 per mode as Smash's GSP, worked out after each match against people) are
     # kept by name, shown after each person's name tag and drawn by Eden over each card on the
     # character select.
-    python smash_record.py --players 8 --pad 7 --figs Ultimus,Optimus,Nostradamus,Magnus \
+    python smash_record.py --players 8 --pad 7 --figs Ultimus,Ganon,Link,Zelda,Mac,Bowser \
       --agent ~/smash-ai/models/ultimus.npz --sparring --min-battery 0 --sync 1 \
       --points ~/smash-ai/points.json --badges ~/smash-ai/badges-points.json \
       $([ -e ~/smash-ai/train ] && echo --auto) >> ~/smash-ai/ultimus.log 2>&1

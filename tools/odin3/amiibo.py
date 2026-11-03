@@ -4,7 +4,7 @@
 # Virtual amiibo for the AIs: a plain (unencrypted) NTAG215 in the layout Eden loads without keys
 # (NTAG215File, src/core/hle/service/nfp/nfp_types.h), registered with the AI's name as nickname
 # and owner Mii, so a game takes it as a figure of that name without any setup.
-#   amiibo.py <name> <out.bin> [amiibo id hex, Mario by default]
+#   amiibo.py <name> <out.bin> [amiibo id hex, Mario by default] [a FIG Smash registered: its game data, at level 50]
 #   amiibo.py strength <strength.json> <bin>...   sets each AI's FIG to its level (with_level()), prints
 #                                                 the files it rewrote
 import datetime, hashlib, json, os, struct, sys, zlib
@@ -48,6 +48,15 @@ def build(name, amiibo_id=MARIO):
     d[0x1d4:0x1dc] = part1 + bytes([check1]) + part2 + bytes([nintendo_id])
     d[0x1dc:0x1e4] = amiibo_id.to_bytes(8, "big")
     struct.pack_into("<III", d, 0x208, 0xbd0f0001, 0x04000000, 0x5f)  # dynamic lock, CFG0, CFG1
+    return bytes(d)
+
+
+def from_fig(name, amiibo_id, fig):
+    """name's figure holding the game data of fig, one Smash registered (Extras › amiibo): a FIG
+    without going through that menu, for another fighter too (3/11)."""
+    d = bytearray(build(name, amiibo_id))
+    d[0x2a], d[0x2c] = fig[0x2a], fig[0x2c]  # write counter, flags: game data in
+    d[0xac:0x1b8] = fig[0xac:0x1b8]  # Smash's title and application ids, then its area
     return bytes(d)
 
 
@@ -115,5 +124,11 @@ if __name__ == "__main__":
             if name in levels and set_level(path, levels[name]):
                 print(path)
     else:
+        amiibo_id = int(sys.argv[3], 16) if len(sys.argv) > 3 else MARIO
+        if len(sys.argv) > 4:
+            with open(sys.argv[4], "rb") as f:
+                data = with_level(from_fig(sys.argv[1], amiibo_id, f.read()), sys.argv[1], 50)
+        else:
+            data = build(sys.argv[1], amiibo_id)
         with open(sys.argv[2], "wb") as f:
-            f.write(build(sys.argv[1], int(sys.argv[3], 16) if len(sys.argv) > 3 else MARIO))
+            f.write(data)

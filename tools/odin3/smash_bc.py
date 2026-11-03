@@ -61,7 +61,22 @@ JUMPS = 2  # Mario's, the one from the ground counted: walking off the stage spe
 # looked for where the last frame's speeds take both fighters this many frames ahead.
 LEAD = 4
 A, B, X, ZR = 0x1, 0x2, 0x4, 0x200
-RULES = 5  # version of Agent.rules, kept in the match header
+RULES = 6  # version of Agent.rules, kept in the match header
+# One FIG per fighter (Hamza, 3/11: Mario, Ganondorf, Link, Zelda, Little Mac, Bowser): what the
+# rules take from the fighter they play, by fighter kind. reach: how far its moves hit against
+# Mario's (the distances the rules test are divided by it); shot: its press from afar ("n" neutral
+# special, "s" side special toward the other fighter, None: it runs in); up_b: how far below the
+# ledge it falls before its up special; hop: short hops in with aerials (Little Mac's are weak);
+# smash_at: the damage it smashes from; aim: its up special goes where the stick points (Zelda's
+# Farore's Wind). Kinds read off the logs of 2/11 (Bare's Ganondorf 0x18, Hamz's Little Mac 0x34).
+FIGHTERS = {
+    0x00: dict(reach=1.0, shot="n", up_b=-45, hop=True, smash_at=90, aim=False),  # Mario
+    0x18: dict(reach=1.25, shot=None, up_b=-30, hop=True, smash_at=75, aim=False),  # Ganondorf
+    0x02: dict(reach=1.35, shot="s", up_b=-20, hop=True, smash_at=95, aim=False),  # Link, boomerang
+    0x11: dict(reach=1.1, shot=None, up_b=-40, hop=True, smash_at=95, aim=True),  # Zelda
+    0x34: dict(reach=0.95, shot=None, up_b=-15, hop=False, smash_at=80, aim=False),  # Little Mac
+    0x0f: dict(reach=1.25, shot=None, up_b=-30, hop=True, smash_at=80, aim=False),  # Bowser
+}
 
 
 def fighter_features(d, i, sign):
@@ -200,7 +215,7 @@ class Agent:
         self.sent, self.wait, self.fire = (0, 0.0, 0.0), 0, 0
 
     def recover(self, me, prev):
-        """Mario's way back to the stage, or None above it.
+        """The way back to the stage, or None above it.
 
         Once off the stage, drift toward the ledge, jump when falling with a jump left, then up
         special once out of jumps and close enough or low, as the CPU does around y -50. What the
@@ -217,17 +232,20 @@ class Agent:
         lx = side if ax < EDGE + 3 and me.y < -5 else -side if ax > EDGE + 8 else 0
         if me.hitstun > 0:
             return 0, -side * 0.7, 0.7  # in, and up against the blast zone
+        if me.status >= SPECIAL and self.f["aim"]:
+            v = np.array([side * (EDGE - 5) - me.x, 5 - me.y])  # just over the ledge
+            return 0, *(v / max(np.linalg.norm(v), 1e-3)).tolist()
         if me.status in ATTACK or me.status == FALL_SPECIAL or me.status >= SPECIAL:
             return 0, float(lx), 0.0  # nothing else comes out until it ends
         mask = self.sent[0]
         if me.y < prev.y and me.jumps < JUMPS:
             return (0 if mask & X else X), float(lx), 0.0
-        if me.y < prev.y and (ax < EDGE + 15 and me.y < 0 or me.y < -45):
+        if me.y < prev.y and (ax < EDGE + 15 and me.y < 0 or me.y < self.f["up_b"]):
             return (0 if mask & B else B), lx * 0.25, 1.0  # up special, a little toward the stage
         return 0, float(lx), 0.0
 
     def rules(self, me, o, pme, po):
-        """Mario's pad above the stage.
+        """The pad above the stage, as Mario's with the fighter's FIGHTERS.
 
         Shield an attack close by and grab out of shield once the shield is hit, grab a shield,
         follow a hit with up tilts, up smash what falls from above, poke close by, rush in with
@@ -243,7 +261,8 @@ class Agent:
         px = o.x - me.x + LEAD * (o.x - po.x - me.x + pme.x)
         py = o.y - me.y + LEAD * (o.y - po.y - me.y + pme.y)
         side = 1 if px > 0 else -1
-        dx, dy = abs(px), py
+        f = self.f
+        dx, dy = abs(px) / f["reach"], py / f["reach"]
         facing = me.lr == side
         dodging = o.status in DODGE
         grounded = o.situation == 0
@@ -258,6 +277,10 @@ class Agent:
         def smash(lx, ly):
             # A smash takes the stick from rest to the rim with A on the same frame.
             return press(A, lx, ly) if neutral else (0, 0.0, 0.0)
+
+        def shoot(cool):
+            self.fire = 60 if f["shot"] == "s" else cool  # a boomerang comes back first
+            return press(B, float(side), 0.0) if f["shot"] == "s" else press(B)
 
         if me.status in HELD:
             return (A if prev_mask & A == 0 else 0), (1.0 if plx <= 0 else -1.0), 0.0  # mash out
@@ -293,16 +316,15 @@ class Agent:
                 return 0, float(np.sign(spot - me.x)) * 0.6, 0.0
             if me.lr != side:
                 return 0, side * 0.3, 0.0
-            if o_off and not self.fire:
-                self.fire = 45
-                return press(B)
+            if o_off and f["shot"] and not self.fire:
+                return shoot(45)
             return 0, 0.0, 0.0
         close = dx < 22 and -10 < dy < 18
         if o.hitstun > 0 and dx < 20:
             if 5 < dy < 35 and dx < 12:
                 return press(A, 0.0, 0.45)  # up tilt
             if facing and abs(dy) < 8:
-                return smash(side, 0.0) if o.damage > 100 else press(A)
+                return smash(side, 0.0) if o.damage > f["smash_at"] + 10 else press(A)
         if dx < 15 and 10 <= dy < 30 and o.situation == 2 and o.y < po.y:
             return smash(0.0, 1.0)  # up smash, Mario's head is intangible
         if close:
@@ -319,7 +341,7 @@ class Agent:
             if not self.wait and grounded:
                 self.wait = 12
                 r = self.rng.random()
-                if o.damage > 90 and abs(dy) < 8 and dx < 14 and r < 0.4:
+                if o.damage > f["smash_at"] and abs(dy) < 8 and dx < 14 and r < 0.4:
                     return smash(side, 0.0)
                 if dx < 12 and r > 0.8:
                     return press(A | ZR)  # grab
@@ -331,19 +353,19 @@ class Agent:
             return 0, 0.0, 0.0
         if abs(me.x) > EDGE - 12 and abs(o.x) < abs(me.x):
             return 0, -np.sign(me.x) * 0.6, 0.0  # away from our own ledge
-        if dx > 50:
+        if dx > 50 and f["shot"]:
             if me.lr != side:
                 return 0, side * 0.3, 0.0
             if not self.fire:
-                self.fire = 40
-                return press(B)
+                return shoot(40)
         elif dx < 35 and not self.wait and not dodging:
             self.wait = 20
             # Only a run makes A a dash attack: standing, v4's came out as tilts and smashes
             # 25 or more away.
             if grounded and facing and me.status in RUNNING and self.rng.random() < 0.6:
                 return press(A | ZR if o.status in SHIELD else A, float(side), 0.0)  # dash attack or dash grab
-            return press(X, side * 0.6, 0.0)  # short hop in: the air rules take it
+            if f["hop"]:
+                return press(X, side * 0.6, 0.0)  # short hop in: the air rules take it
         return 0, float(side), 0.0  # run in, also between fireballs (it stood 19 % of the time)
 
     def pad(self, mask, lx, ly):
@@ -375,6 +397,7 @@ class Agent:
             self.buttons[0] = 0.0
             if self.stick != [BINS // 2] * 2:
                 self.buttons[1] = 0.0
+        self.f = FIGHTERS.get(me.kind, FIGHTERS[0])
         back = self.recover(me, prev.get(self.me, me)) or self.rules(me, o, prev.get(self.me, me), prev.get(other, o))
         if back:
             mask, lx, ly = back

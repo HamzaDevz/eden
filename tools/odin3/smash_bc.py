@@ -453,7 +453,7 @@ def load(path):
         state["inp.0.weight"] = torch.cat([w[:, :CONT], w.new_zeros(len(w), SIGHT), w[:, CONT:]], 1)
     model.load_state_dict(state, strict=False)
     model.version = checkpoint.get("version")  # set by smash_rl.py, which compares versions
-    model.style = checkpoint.get("style") or {}
+    model.style = {str(k): float(v) for k, v in (checkpoint.get("style") or {}).items()}  # for npz()'s JSON
     return model.eval()
 
 

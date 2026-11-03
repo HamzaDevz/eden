@@ -171,14 +171,10 @@ def mode_of(fighters, teams=False):
 
 
 def global_levels(points, names=()):
-    """Everyone's level over all modes, AIs and people on one scale (Hamza, 3/11): the mean of their
-    points in the modes they played, START being 50 and each KO_POINTS more a level; names that
-    played none at 50."""
-    out = {}
-    for n in {n for table in points.values() for n in table} | set(names):
-        mine = [table[n] for table in points.values() if n in table] or [START]
-        out[n] = round(sum(mine) / len(mine) / KO_POINTS, 2)
-    return out
+    """Everyone's level, AIs and people on one scale, from their 1 on 1 points only (Hamza, 3/11: not
+    the free-for-all's): START is 50 and each KO_POINTS more a level; names that played none at 50."""
+    return {n: round(points["1v1"].get(n, START) / KO_POINTS, 2)
+            for n in {n for table in points.values() for n in table} | set(names)}
 
 
 class Points:

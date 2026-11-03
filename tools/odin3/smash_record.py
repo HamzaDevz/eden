@@ -84,6 +84,14 @@ def refig(right):
 
 
 REFIG_RIGHT = (12, 30)
+# With --auto, a player card without a fighter on no AI's controller can only come from its own
+# presses on player 1's (an A off the select, 3/11): no match starts with it. The first AI's hand
+# removes it with the "−" icon, whose bottom its finger reaches in the bottom right corner (it
+# drops the last card).
+DROP = ([(0, 32767, -32767)] * 150 + [(0, 0, 0)] * 12 + [(BUTTON_A, 0, 0)] * PRESS_FRAMES
+        + [(0, 0, 0)] * 30)
+DROP_AFTER = 3  # looks the card stays so
+OFF_CSS_P1 = 4  # with --pad, presses off the select before player 1's controller gets them too
 # With --auto, someone who wants to play cannot join a match the AIs started, nor pause it: the
 # first AI quits it from its pause menu (+, down to "Quitter", A, right to "Oui", A).
 QUIT = ([(BUTTON_PLUS, 0, 0)] * PRESS_FRAMES + [(0, 0, 0)] * 40
@@ -358,6 +366,8 @@ def main():
                     "Challenger's Approach on Games & More, the agent fights them all as Mario")
     ap.add_argument("--selfplay", action="store_true", help="the agent plays every human slot")
     ap.add_argument("--level", type=int, help="level of the CPU, kept in the match header")
+    ap.add_argument("--cpu-level", type=int, help="with --pad, the level the CPU cards are "
+                    "given as + starts the match, past Smash's 9 to see what it does")
     ap.add_argument("--level-file", help="CPU level to follow, read after each match: player 1 "
                     "then goes back through the character select to set it")
     ap.add_argument("--tag", help="a person's name tags, comma separated, renamed as the AIs' FIG "
@@ -453,7 +463,8 @@ def main():
     quiet, quiet_until = set(), 0  # slots the agent played, their last input still shows a while
     pads = {}  # the controller playing each slot the agent plays
     join_steps, next_look, seen = [], 0, None  # with --pad: a REFIG in progress, the next look
-    picking, tried = None, None  # (card, controller) of the REFIG, cards it gave up on
+    picking, tried = None, None  # (card, controller) of the REFIG (card None: a DROP), cards it gave up on
+    empty_seen = 0  # looks the last card was a player card without a fighter
     refig_at, refig_fails = 0, 0  # REFIG_RIGHT's path in use, its failures in a row
     fig_cards, last_ai, waited = {}, {}, {}  # AIs' FIG cards, the AI each card had, looks waiting
     placed, placed_until = None, 0  # an amiibo put back on the reader
@@ -548,7 +559,7 @@ def main():
                           "manager": smash_state.FIGHTER_MANAGER, "layout": layout,
                           "names": tags, "agent": a.agent if active else None,
                           "me": me, "pad": a.pad, "figs": figs,
-                          "agents": sorted(active), "level": a.level, "sync": a.sync,
+                          "agents": sorted(active), "level": a.level, "cpu_level": a.cpu_level, "sync": a.sync,
                           "version": next(iter(active.values())).model.version if active else None,
                           "rules": next(iter(active.values())).RULES if active else None}
                 out.write("# " + json.dumps(header) + "\n")
@@ -661,7 +672,9 @@ def main():
                     if not join_steps:
                         b.release(pad)
                         now = smash_state.cards(f)
-                        if now.get(card, (None,))[0] == smash_state.FIG:
+                        if card is None:
+                            log(f"{len(now)} cards left")
+                        elif now.get(card, (None,))[0] == smash_state.FIG:
                             log(f"card {card + 1} is {pad_figs[pad]}'s FIG card again")
                             last_ai[card] = pad_figs[pad]  # its amiibo goes back below
                             refig_fails = 0
@@ -700,6 +713,11 @@ def main():
                             b.poke(f"kind{i}", bytes(4), f"main+{smash_state.CARDS + i * smash_state.CARD_SIZE + smash_state.CARD_KIND:#x}")
                             b.poke(f"kindcopy{i}", bytes(4), f"main+{smash_state.CARD_PADS + i * smash_state.CARD_PAD_SIZE + smash_state.CARD_COPY + smash_state.CARD_KIND:#x}")
                             converted[i] = fig_cards[i] = last_ai[i] = nick
+                    for i, (kind, _) in smash_state.cards(f).items() if a.cpu_level else ():
+                        if kind == smash_state.CPU:
+                            for pid, at in ((f"level{i}", smash_state.CARDS + i * smash_state.CARD_SIZE),
+                                            (f"levelcopy{i}", smash_state.CARD_PADS + i * smash_state.CARD_PAD_SIZE + smash_state.CARD_COPY)):
+                                b.poke(pid, bytes([a.cpu_level]), f"main+{at + smash_state.CARD_LEVEL:#x}")
                     if converted:
                         kinds_until = f.index + KINDS_FOR
                         log("+: " + ", ".join(f"card {i + 1} is {n}'s" for i, n in converted.items()))
@@ -773,7 +791,15 @@ def main():
                             for p in [owners.get(i, ("", -1))[1]]
                             if kind == smash_state.HUMAN and p in pad_figs
                             and not (kinds_until and i in converted)]
-                    if lost and now != tried:
+                    last = max(now, default=None)
+                    empty_seen = empty_seen + 1 if a.auto and a.pad is not None and len(now) > 2 \
+                        and now[last] == (smash_state.HUMAN, 0) \
+                        and owners.get(last, ("", -1))[1] not in pad_figs else 0
+                    if empty_seen >= DROP_AFTER:
+                        log(f"card {last + 1} is a player card without a fighter: "
+                            f"{pad_figs[a.pad]}'s hand removes it")
+                        picking, join_steps, empty_seen = (None, a.pad), list(DROP), 0
+                    elif lost and now != tried:
                         # Its presses anywhere but on the character select could open a menu.
                         shot = smash_farm.grab(b)
                         name, dist = smash_farm.screen(shot[0], refs) if shot else ("none", 0)
@@ -917,6 +943,11 @@ def main():
                     # Off the select: the results, or a challenge met, which only player 1's
                     # controller closes, by A on its picture then B on the board.
                     off_css = 0 if name in ("css", "ready") else off_css + 1
+                    if not off_css and figs_back:
+                        # The FIG cards are still held as such: a match + started now would be
+                        # Smash's FIG AI's (a quarter of them on 3/11, all lost 0-3 to the CPU).
+                        next_press = f.index
+                        continue
                     pressed = (BUTTON_PLUS if not off_css else
                                BUTTON_B if off_css % 2 == 0 else BUTTON_A)
                 elif result:
@@ -926,7 +957,9 @@ def main():
                 # Player 1's controller only: on the character select, a press from player 2's
                 # makes it a human player, and the CPU's slot is lost until someone clears it.
                 # With --pad, the first AI's: player 1's has no card there.
-                for i in ([a.pad, 0] if off_css else [a.pad]) if a.pad is not None else \
+                # Player 1's only after a few looks off the select: a screen not told apart as the
+                # select a moment would make it join there (3/11).
+                for i in ([a.pad, 0] if off_css > OFF_CSS_P1 else [a.pad]) if a.pad is not None else \
                         range(a.players if a.selfplay else 1):
                     b.pad(i, pressed)
                 press_until = f.index + PRESS_FRAMES

@@ -30,6 +30,7 @@ HUMAN, CPU, FIG, NO_CARD = 0, 1, 2, 3
 # name tag's record in the save data (TAGS) at +4, then a copy of the card at +0x88. The match
 # takes each fighter's kind and controller from both.
 CARD_PADS, CARD_PAD_SIZE, CARD_TAG, CARD_COPY = 0x53095b0, 0x240, 0x4, 0x88
+CARD_LEVEL = 0x21  # u8, a CPU card's level, 1 to 9 on the select (poked to 1, 3/11: a CPU that barely hits)
 MARIO = 0x0edaf3c863  # hash40("ui_chara_mario")
 ENTRY_PAD = 0x10  # s32 controller of a FighterEntry, -1 for a CPU or a FIG
 # The save data the game works on and writes to system_data.bin, at [[main+0x5314508]] (a second

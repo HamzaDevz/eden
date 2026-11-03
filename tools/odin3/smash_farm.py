@@ -344,6 +344,9 @@ class Instance:
             figs = [self.ai] + [n for n in self.a.figs.split(",") if n != self.ai]
             mode += ["--players", "8", "--pad", str(FIG_PAD), "--figs", ",".join(figs),
                      "--amiibo", os.path.join(self.dir, "amiibo")]
+        phase = os.path.join(self.a.home, "phase")
+        if not self.cpu and os.path.exists(phase) and open(phase).read().strip() == "selfplay":
+            mode += ["--selfplay"]  # else the recorder stops after each match in that phase
         with open(self.log, "a") as out:
             subprocess.Popen([sys.executable, "-u", "smash_record.py", "--port", str(self.port),
                               "--sync", "1", "--auto", "--min-battery", "0",

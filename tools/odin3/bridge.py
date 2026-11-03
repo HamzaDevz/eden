@@ -10,7 +10,7 @@
 #   bridge.py shot <out.png> [height]   the next presented frame (Vulkan or OpenGL renderer)
 #   bridge.py step <frames> [out.png] [height]   runs that many frames then leaves the game paused
 # Players are npad indices: 0-7 for players 1-8, 8 for handheld.
-import argparse, collections, socket, struct, sys, time, zlib
+import argparse, collections, os, shutil, socket, struct, sys, time, zlib
 
 BUTTONS = ["a", "b", "x", "y", "lstick", "rstick", "l", "r", "zl", "zr", "plus", "minus",
            "left", "up", "right", "down"]
@@ -104,6 +104,14 @@ class Bridge:
 
     def amiibo(self, path=None):
         """Puts the amiibo file at path (on the console) on the NFC reader, or takes it off."""
+        if path and " " in path and os.path.isfile(path):
+            # The bridge splits its commands on spaces ("Big Mac.bin", 3/11): a copy without them,
+            # beside the amiibo folder so Eden's list does not show it.
+            copy = os.path.join(os.path.dirname(os.path.dirname(path)), "amiibo-bridge",
+                                os.path.basename(path).replace(" ", "_"))
+            os.makedirs(os.path.dirname(copy), exist_ok=True)
+            shutil.copyfile(path, copy)
+            path = copy
         return self.ask(f"amiibo {path or '-'}", "ok").startswith("ok")
 
     def pad(self, player, buttons=0, lx=0, ly=0, rx=0, ry=0):

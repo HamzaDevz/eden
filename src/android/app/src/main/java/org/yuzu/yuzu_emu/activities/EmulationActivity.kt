@@ -485,6 +485,10 @@ class EmulationActivity : AppCompatActivity(), SensorEventListener, InputManager
             return super.dispatchKeyEvent(event)
         }
 
+        if (isControllerInput && currentEmulationFragment()?.onAmiiboPickerInput(event) == true) {
+            return true
+        }
+
         if (isControllerInput && event.action == KeyEvent.ACTION_DOWN) {
             notifyControllerInput()
         }
@@ -511,6 +515,10 @@ class EmulationActivity : AppCompatActivity(), SensorEventListener, InputManager
             return true
         }
 
+        if (isControllerInput && currentEmulationFragment()?.onAmiiboPickerInput(event) == true) {
+            return true
+        }
+
         if (isControllerInput) {
             notifyControllerInput()
         }
@@ -518,12 +526,14 @@ class EmulationActivity : AppCompatActivity(), SensorEventListener, InputManager
         return InputHandler.dispatchGenericMotionEvent(event)
     }
 
-    private fun notifyControllerInput() {
+    private fun currentEmulationFragment(): org.yuzu.yuzu_emu.fragments.EmulationFragment? {
         val navHostFragment =
             supportFragmentManager.findFragmentById(R.id.fragment_container) as? NavHostFragment
-        val emulationFragment =
-            navHostFragment?.childFragmentManager?.fragments?.firstOrNull() as? org.yuzu.yuzu_emu.fragments.EmulationFragment
-        emulationFragment?.onControllerInputDetected()
+        return navHostFragment?.childFragmentManager?.fragments?.firstOrNull() as? org.yuzu.yuzu_emu.fragments.EmulationFragment
+    }
+
+    private fun notifyControllerInput() {
+        currentEmulationFragment()?.onControllerInputDetected()
     }
 
     private fun isGameController(deviceId: Int): Boolean {

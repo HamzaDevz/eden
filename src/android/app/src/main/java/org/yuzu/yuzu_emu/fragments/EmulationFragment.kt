@@ -16,6 +16,7 @@ import android.content.IntentFilter
 import android.content.pm.ActivityInfo
 import android.content.res.Configuration
 import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.net.Uri
 import android.os.BatteryManager
 import android.os.BatteryManager.*
@@ -26,6 +27,8 @@ import android.os.Looper
 import android.os.SystemClock
 import android.util.Rational
 import android.view.Gravity
+import android.view.InputEvent
+import android.view.KeyEvent
 import android.view.LayoutInflater
 import android.view.MotionEvent
 import android.view.Surface
@@ -73,6 +76,7 @@ import org.yuzu.yuzu_emu.databinding.DialogOverlayAdjustBinding
 import org.yuzu.yuzu_emu.databinding.FragmentEmulationBinding
 import org.yuzu.yuzu_emu.dialogs.QuickSettings
 import org.yuzu.yuzu_emu.features.input.NativeInput
+import org.yuzu.yuzu_emu.features.input.model.NativeButton
 import org.yuzu.yuzu_emu.features.settings.model.BooleanSetting
 import org.yuzu.yuzu_emu.features.settings.model.IntSetting
 import org.yuzu.yuzu_emu.features.settings.model.Settings
@@ -100,12 +104,16 @@ import org.yuzu.yuzu_emu.utils.ViewUtils
 import org.yuzu.yuzu_emu.utils.ViewUtils.setVisible
 import org.yuzu.yuzu_emu.utils.collect
 import org.yuzu.yuzu_emu.utils.CustomSettingsHandler
+import org.yuzu.yuzu_emu.views.AmiiboPickerView
 import org.yuzu.yuzu_emu.views.LevelBadgeView
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.nio.ByteBuffer
+import java.nio.ByteOrder
 import kotlin.coroutines.resume
 import kotlin.coroutines.suspendCoroutine
+import kotlin.math.abs
+import kotlin.math.sign
 import kotlin.or
 
 class EmulationFragment : Fragment(), SurfaceHolder.Callback {
@@ -155,11 +163,12 @@ class EmulationFragment : Fragment(), SurfaceHolder.Callback {
     private var amiiboLoadJob: Job? = null
 
     // A game waiting for an amiibo, such as a FIG card in Smash, is offered the ones of the
-    // amiibo folder at once (the AIs' virtual amiibo on the Odin)
+    // amiibo folder at once (the AIs' virtual amiibo on the Odin), drawn over the game as its own
     private val amiiboOfferHandler = Handler(Looper.getMainLooper())
     private var amiiboWaitingSince = 0L
     private var amiiboOffered = false
-    private var amiiboOffer: android.app.Dialog? = null
+    private var amiiboPicker: AmiiboPickerView? = null
+    private var amiiboPickerStep = 0 // the way a stick or hat last moved it, to move once per push
     private val amiiboOfferRunnable = object : Runnable {
         override fun run() {
             offerAmiibo()
@@ -1494,8 +1503,7 @@ class EmulationFragment : Fragment(), SurfaceHolder.Callback {
             NativeLibrary.getVirtualAmiiboState()
         ) == AmiiboState.WaitingForAmiibo
         if (!waiting) {
-            amiiboOffer?.dismiss()
-            amiiboOffer = null
+            closeAmiiboPicker()
             amiiboWaitingSince = 0L
             amiiboOffered = false
             return
@@ -1510,19 +1518,112 @@ class EmulationFragment : Fragment(), SurfaceHolder.Callback {
             return
         }
         amiiboOffered = true
-        val files = requireContext().getExternalFilesDir("amiibo")
-            ?.listFiles { file -> file.extension == "bin" }?.sortedBy { it.name }
-        if (files.isNullOrEmpty()) {
-            return
-        }
-        amiiboOffer = MaterialAlertDialogBuilder(requireContext())
-            .setTitle(R.string.amiibo_title)
-            .setItems(files.map { it.nameWithoutExtension }.toTypedArray()) { _, which ->
-                loadAmiiboFile(files[which])
+        val dir = requireContext().getExternalFilesDir("amiibo") ?: return
+        viewLifecycleOwner.lifecycleScope.launch {
+            val found = withContext(Dispatchers.IO) { amiiboEntries(dir) }
+            val b = _binding
+            if (found.isNotEmpty() && b != null && amiiboOffered && amiiboPicker == null) {
+                showAmiiboPicker(b, found)
             }
-            .setNegativeButton(android.R.string.cancel, null)
-            .setOnDismissListener { amiiboOffer = null }
-            .show()
+        }
+    }
+
+    /**
+     * The amiibo folder's figures, each with its card's level when Smash keeps its data there and
+     * its fighter's portrait (images/<amiibo character>.png, from tools/odin3/smash_record.py).
+     */
+    private fun amiiboEntries(dir: File): List<Pair<File, AmiiboPickerView.Entry>> =
+        dir.listFiles { file -> file.extension == "bin" }.orEmpty().sortedBy { it.name }
+            .mapNotNull { file ->
+                val data = runCatching { file.readBytes() }.getOrNull()
+                    ?.takeIf { it.size >= AMIIBO_ID + 8 } ?: return@mapNotNull null
+                val big = ByteBuffer.wrap(data)
+                val nick = String(data, 0x38, 0x14, Charsets.UTF_16BE).substringBefore('\u0000')
+                // An AI's FIG may show its level after its name, past the 50 its card stops at
+                val level = nick.substringAfterLast(' ', "").toIntOrNull()
+                    ?: if (big.getInt(0xb6) == SMASH_APP_ID) {
+                        val xp = ByteBuffer.wrap(data).order(ByteOrder.LITTLE_ENDIAN)
+                            .getShort(SMASH_XP).toInt() and 0xffff
+                        SMASH_LEVEL_XP.count { xp >= it }
+                    } else {
+                        null
+                    }
+                val image = File(dir, "images/%04x.png".format(big.getLong(AMIIBO_ID) ushr 48))
+                val portrait = if (image.isFile) BitmapFactory.decodeFile(image.path) else null
+                file to AmiiboPickerView.Entry(file.nameWithoutExtension, level, portrait)
+            }
+
+    private fun showAmiiboPicker(
+        b: FragmentEmulationBinding,
+        found: List<Pair<File, AmiiboPickerView.Entry>>
+    ) {
+        val surface = b.surfaceEmulation
+        val picker = AmiiboPickerView(requireContext())
+        picker.onPick = { i ->
+            closeAmiiboPicker()
+            loadAmiiboFile(found[i].first)
+        }
+        picker.onClose = ::closeAmiiboPicker
+        picker.elevation = 1f // over the level badges, which come and go
+        b.gameBadges.addView(
+            picker,
+            surface.width.takeIf { it > 0 } ?: ViewGroup.LayoutParams.MATCH_PARENT,
+            surface.height.takeIf { it > 0 } ?: ViewGroup.LayoutParams.MATCH_PARENT
+        )
+        picker.x = surface.x
+        picker.y = surface.y
+        picker.show(
+            found.map { it.second },
+            getString(R.string.amiibo_pick_title),
+            getString(R.string.amiibo_pick_level),
+            getString(R.string.amiibo_pick),
+            getString(R.string.amiibo_pick_back)
+        )
+        amiiboPicker = picker
+        amiiboPickerStep = 0
+    }
+
+    private fun closeAmiiboPicker() {
+        val picker = amiiboPicker ?: return
+        amiiboPicker = null
+        _binding?.gameBadges?.removeView(picker)
+    }
+
+    /**
+     * A pad's input while the amiibo picker is up, taken from the game: left and right move, the
+     * button the pad plays A with picks and its B closes. Releases and a stick at rest still reach
+     * the game, for nothing to stay held there.
+     */
+    fun onAmiiboPickerInput(event: InputEvent): Boolean {
+        val picker = amiiboPicker ?: return false
+        if (event is KeyEvent) {
+            if (event.action != KeyEvent.ACTION_DOWN) {
+                return false
+            }
+            val key = InputHandler.getButtonIdFromEvent(event)
+            when {
+                key == KeyEvent.KEYCODE_DPAD_LEFT ||
+                    InputHandler.playsButton(event, NativeButton.DLeft) -> picker.move(-1)
+                key == KeyEvent.KEYCODE_DPAD_RIGHT ||
+                    InputHandler.playsButton(event, NativeButton.DRight) -> picker.move(1)
+                event.repeatCount > 0 -> {}
+                InputHandler.playsButton(event, NativeButton.A) -> picker.pick()
+                InputHandler.playsButton(event, NativeButton.B) -> picker.close()
+            }
+            return true
+        }
+        if (event !is MotionEvent) {
+            return false
+        }
+        val x = listOf(MotionEvent.AXIS_HAT_X, MotionEvent.AXIS_X).map(event::getAxisValue)
+            .firstOrNull { abs(it) > 0.5f } ?: 0f
+        val step = sign(x).toInt()
+        if (step != 0 && step != amiiboPickerStep) {
+            picker.move(step)
+        }
+        amiiboPickerStep = step
+        return step != 0 || abs(event.getAxisValue(MotionEvent.AXIS_HAT_Y)) > 0.5f ||
+            abs(event.getAxisValue(MotionEvent.AXIS_Y)) > 0.5f
     }
 
     private fun updateBadges() {
@@ -1599,7 +1700,7 @@ class EmulationFragment : Fragment(), SurfaceHolder.Callback {
         amiiboLoadJob?.cancel()
         amiiboLoadJob = null
         amiiboOfferHandler.removeCallbacks(amiiboOfferRunnable)
-        amiiboOffer?.dismiss()
+        amiiboPicker = null
         badgeHandler.removeCallbacks(badgeRunnable)
         badgeViews.clear()
         perfStatsRunnable?.let { perfStatsUpdateHandler.removeCallbacks(it) }
@@ -2626,6 +2727,19 @@ class EmulationFragment : Fragment(), SurfaceHolder.Callback {
     companion object {
         private val AMIIBO_MIME_TYPES =
             arrayOf("application/octet-stream", "application/x-binary", "*/*")
+
+        // Where an amiibo keeps its ID, and Smash its game data and the experience its card's
+        // level comes from (tools/odin3/amiibo.py)
+        private const val AMIIBO_ID = 0x1dc
+        private const val SMASH_APP_ID = 0x34f80200
+        private const val SMASH_XP = 0xdc + 0x70
+        private val SMASH_LEVEL_XP = intArrayOf(
+            0x000, 0x008, 0x016, 0x029, 0x03f, 0x05a, 0x078, 0x09b, 0x0c3, 0x0ee,
+            0x11c, 0x14a, 0x178, 0x1aa, 0x1dc, 0x210, 0x244, 0x278, 0x2ac, 0x2e1,
+            0x316, 0x34b, 0x380, 0x3b6, 0x3ec, 0x422, 0x458, 0x48f, 0x4c6, 0x4fd,
+            0x53b, 0x57e, 0x5c6, 0x613, 0x665, 0x6bc, 0x718, 0x776, 0x7dc, 0x843,
+            0x8ac, 0x919, 0x99b, 0xa3b, 0xaef, 0xbb7, 0xc89, 0xd65, 0xe55, 0xf48
+        )
         private val perfStatsUpdateHandler = Handler(Looper.myLooper()!!)
         private val socUpdateHandler = Handler(Looper.myLooper()!!)
     }

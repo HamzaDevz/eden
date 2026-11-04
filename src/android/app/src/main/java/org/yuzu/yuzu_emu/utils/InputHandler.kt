@@ -196,6 +196,21 @@ object InputHandler {
         }
     }
 
+    /**
+     * Whether event's key plays button for the pad's player, so that a pad's A is the one it
+     * plays the game's A with whatever its labels say. The pad joins first, as on any press.
+     */
+    fun playsButton(event: KeyEvent, button: NativeButton): Boolean {
+        val device = androidControllers[event.device?.controllerNumber ?: return false] ?: return false
+        claimPlayer(device)
+        val id = getButtonIdFromEvent(event)
+        return (0 until PLAYER_COUNT).any { playerIndex ->
+            val params = NativeInput.getButtonParam(playerIndex, button)
+            NativeInput.getIsConnected(playerIndex) && isDevice(params, device) &&
+                params.get("button", -1) == id
+        }
+    }
+
     fun isMenuButton(keyCode: Int): Boolean =
         keyCode == KeyEvent.KEYCODE_BUTTON_MODE || keyCode == KeyEvent.KEYCODE_BACK
 

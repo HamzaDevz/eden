@@ -845,6 +845,10 @@
 
     <!-- Amiibo -->
     <string name="amiibo_title">Amiibo</string>
+    <string name="amiibo_pick_title">Choisis une figurine amiibo</string>
+    <string name="amiibo_pick_level">Niv.</string>
+    <string name="amiibo_pick">Choisir</string>
+    <string name="amiibo_pick_back">Retour</string>
     <string name="amiibo_removed_message">L’Amiibo actuel a été supprimé</string>
     <string name="amiibo_wrong_state">Le jeu actuel ne recherche pas d’Amiibo</string>
     <string name="amiibo_not_valid">Le fichier sélectionné n’est pas un Amiibo valide</string>

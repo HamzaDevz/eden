@@ -1014,6 +1014,10 @@
 
     <!-- Amiibo -->
     <string name="amiibo_title">Amiibo</string>
+    <string name="amiibo_pick_title">Choose an amiibo</string>
+    <string name="amiibo_pick_level">Lv.</string>
+    <string name="amiibo_pick">Choose</string>
+    <string name="amiibo_pick_back">Back</string>
     <string name="amiibo_removed_message">The current amiibo has been removed</string>
     <string name="amiibo_wrong_state">The current game is not looking for amiibo</string>
     <string name="amiibo_not_valid">The selected file is not a valid amiibo</string>

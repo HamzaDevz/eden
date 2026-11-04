@@ -16,6 +16,7 @@
 #include "video_core/renderer_vulkan/pipeline_helper.h"
 
 #include "common/bit_field.h"
+#include "common/scope_exit.h"
 #include "video_core/renderer_vulkan/maxwell_to_vk.h"
 #include "video_core/renderer_vulkan/pipeline_statistics.h"
 #include "video_core/renderer_vulkan/vk_buffer_cache.h"
@@ -313,6 +314,11 @@ GraphicsPipeline::GraphicsPipeline(
     auto func{[this, shader_notify, &render_pass_cache, pipeline_statistics] {
         TRACE_SCOPE("PipelineBuild");
         const VkRenderPass render_pass{render_pass_cache.Get(MakeRenderPassKey(key.state, device))};
+        // The driver keeps a mapping per module: with every pipeline holding its own, Smash
+        // reached the 65530 mappings limit and froze. Vulkan allows dropping them once built.
+        SCOPE_EXIT {
+            spv_modules = {};
+        };
         Validate();
         try {
             MakePipeline(render_pass);
@@ -337,12 +343,12 @@ GraphicsPipeline::GraphicsPipeline(
             shader_notify->MarkShaderComplete();
         }
     }};
+    configure_func = ConfigureFunc(spv_modules, stage_infos);
     if (worker_thread) {
         worker_thread->QueueWork(std::move(func));
     } else {
         func();
     }
-    configure_func = ConfigureFunc(spv_modules, stage_infos);
 }
 
 void GraphicsPipeline::AddTransition(GraphicsPipeline* transition) {

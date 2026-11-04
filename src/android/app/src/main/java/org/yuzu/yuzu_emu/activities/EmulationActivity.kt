@@ -384,11 +384,13 @@ class EmulationActivity : AppCompatActivity(), SensorEventListener, InputManager
                             }
                             romSwapThreadStopped = true
                             Log.info("[EmulationActivity] ROM swap thread stop acknowledged")
+                            acknowledgeIdleNativeStop()
                             launchPendingRomSwap(force = false)
                         }
                     } else {
                         Log.warning("[EmulationActivity] ROM swap stop target fragment not found; requesting native stop")
                         romSwapThreadStopped = true
+                        acknowledgeIdleNativeStop()
                         NativeLibrary.stopEmulation()
                     }
 
@@ -397,6 +399,15 @@ class EmulationActivity : AppCompatActivity(), SensorEventListener, InputManager
             }
 
             launchPendingRomSwap(force = false)
+    }
+
+    // onEmulationStopped only comes for a game that booted: none when the activity was recreated
+    // after Android killed the process and the new intent arrived before its game started.
+    private fun acknowledgeIdleNativeStop() {
+        if (!romSwapNativeStopped && !NativeLibrary.isRunning() && !NativeLibrary.isPaused()) {
+            romSwapNativeStopped = true
+            Log.info("[EmulationActivity] ROM swap: no game running, native stop not awaited")
+        }
     }
 
     private fun launchPendingRomSwap(force: Boolean) {

@@ -43,13 +43,14 @@ import signal
 import subprocess
 import sys
 import time
+import zlib
 
 import numpy as np
 
 import amiibo
 import smash_farm
 import smash_state
-from bridge import Bridge, Frame
+from bridge import Bridge, Frame, write_png
 
 ADB = os.path.expanduser("~/Library/Android/sdk/platform-tools/adb")
 LOCK = "/data/local/tmp/odin3.lock"
@@ -104,6 +105,7 @@ LOOK_EVERY = 60
 PLACED_FOR = 180  # frames an amiibo put back stays on the reader, for Smash to scan it
 WAIT_PICK = 3  # looks a FIG card nobody knows waits for its figurine before it gets a free AI's
 AMIIBO = "/storage/emulated/0/Android/data/com.miHoYo.Yuanshen.relWithDebInfo/files/amiibo"
+PORTRAITS = "/sdcard/smash-ai/portraits"  # ultimus.sh copies them into AMIIBO/images for Eden
 KINDS_FOR = 600  # frames the FIG cards stay player cards after a + that started no match
 BACK_FOR = 3600  # frames the AIs' cards stay FIG cards after a match without the character select seen
 
@@ -297,6 +299,64 @@ class Points:
         return out
 
 
+def hash40(s):
+    return len(s) << 32 | zlib.crc32(s.encode())
+
+
+# The amiibo character (the top 16 bits of an amiibo ID) of the AIs' fighters, by Smash's own
+FIGHTER_AMIIBO = {hash40(f"ui_chara_{c}"): a for c, a in (
+    ("mario", 0x0000), ("link", 0x0100), ("zelda", 0x0101), ("ganon", 0x0102), ("koopa", 0x0005),
+    ("littlemac", 0x06c0))}
+
+
+class Portraits:
+    """--portraits: each AI's fighter as the character select draws it on a card, for Eden's
+    amiibo picker (<amiibo character>.png): taken with two cards open, where it is drawn largest,
+    the median of three looks for a hand passing over it to go, a FIG card's over a player card's
+    (whose costume may not be the figurine's)."""
+
+    def __init__(self, path):
+        self.path, self.looks = path, {}  # (card, kind, chara): its crops so far
+        os.makedirs(path, exist_ok=True)
+
+    def wanted(self, cards):
+        """{card: (kind, chara, file)} of the cards whose fighter has no portrait from such a card yet."""
+        out = {}
+        for i, (kind, chara) in cards.items() if len(cards) == 2 else ():
+            c = FIGHTER_AMIIBO.get(chara)
+            png = c is not None and os.path.join(self.path, f"{c:04x}.png")
+            if png and (kind == smash_state.FIG and (not os.path.exists(png) or os.path.exists(png + ".player"))
+                        or kind == smash_state.HUMAN and not os.path.exists(png)):
+                out[i] = kind, chara, png
+        return out
+
+    def take(self, b, cards, wanted):
+        try:
+            w, h, bgra = b.shot(720)
+        except (RuntimeError, TypeError, ValueError):
+            return
+        frame = np.frombuffer(bgra, np.uint8).reshape(h, w, 4)
+        pw = w * CARDS_RIGHT / 1000 / len(cards)  # a card's width, its fighter on its left half
+        top = round(h * (CARDS_TOP + 12) / 1000)
+        # A card whose fighter changed starts over
+        self.looks = {k: v for k, v in self.looks.items() if wanted.get(k[0], ())[:2] == k[1:]}
+        for i, (kind, chara, png) in wanted.items():
+            x = round(pw * sorted(cards).index(i) + pw * 0.02)
+            crops = self.looks.setdefault((i, kind, chara), [])
+            crops.append(frame[top:, x:x + round(pw * 0.53)].copy())
+            if len(crops) < 3:
+                continue
+            crop = np.median(np.stack(crops), 0).astype(np.uint8)
+            write_png(png + ".tmp", crop.shape[1], crop.shape[0], crop.tobytes())
+            os.replace(png + ".tmp", png)
+            if kind == smash_state.HUMAN:
+                open(png + ".player", "w").close()
+            elif os.path.exists(png + ".player"):
+                os.remove(png + ".player")
+            del self.looks[(i, kind, chara)]
+            log(f"portrait of {os.path.basename(png)} taken from card {i + 1}")
+
+
 class Badges:
     """--badges: on the character select, Eden draws the Smash points (Points) of the mode its
     rules make over each card that has a name, an AI's FIG card by its nickname and a player card
@@ -393,6 +453,8 @@ def main():
                     "file (Points); each person's name tag shows theirs after a match (Hamz 12)")
     ap.add_argument("--badges", help="with --points, Eden draws each card's points over it on the "
                     "character select (Badges); this file keeps what it needs")
+    ap.add_argument("--portraits", default=PORTRAITS if os.path.isdir(PORTRAITS) else None,
+                    help="the folder of the AIs' fighters as the select draws them (Portraits)")
     a = ap.parse_args()
     # Started in the background, the process ignores SIGINT: both signals end it cleanly.
     def stop(*_):
@@ -464,6 +526,7 @@ def main():
     tag_seen = tag_level(0) if a.tag and a.strength else None
     points = Points(a.points, fig_pads) if a.points and fig_pads else None
     badges = Badges(a.badges, points) if a.badges and points else None
+    portraits = Portraits(a.portraits) if a.portraits else None
     if badges:
         badges.rows = b.ask("badge probe 1 1 1 0 0 x row", "ok").startswith("ok")
         badges.labels = badges.rows or b.ask("badge probe 1 1 1 0 0 x", "ok").startswith("ok")
@@ -761,12 +824,16 @@ def main():
                 elif count == 0 and f.index >= next_look:
                     next_look = f.index + LOOK_EVERY
                     now, owners = smash_state.cards(f), card_owners(f)
-                    if badges:
+                    wanted = badges.wanted(b, int(info[3].split("=")[1], 16), f) if badges else {}
+                    faces = portraits.wanted(now) if portraits else {}
+                    if badges or faces:
                         # Only on the character select itself, a screenshot tells.
-                        wanted = badges.wanted(b, int(info[3].split("=")[1], 16), f)
-                        shot = smash_farm.grab(b) if wanted else None
+                        shot = smash_farm.grab(b) if wanted or faces else None
                         css = shot and smash_farm.screen(shot[0], refs)[0] in ("css", "ready")
-                        badges.show(b, f, wanted if css else None)
+                        if badges:
+                            badges.show(b, f, wanted if css else None)
+                        if faces and css:
+                            portraits.take(b, now, faces)
                     seated, ai_figs, waiting = {}, {}, set()
                     for i, (kind, chara) in now.items():
                         nick, pad = owners.get(i, ("", -1))
@@ -798,7 +865,8 @@ def main():
                             last_ai[i] = pad_figs[p]
                     # Any other gets the first AI on no card (in --figs order), unless someone picks
                     # a figurine first: no picking Ultimus again after Smash or this restarted.
-                    waited = {i: waited.get(i, 0) + 1 for i in waiting - set(last_ai)}
+                    # Only when this drives the menus: else people pick theirs in Eden (Hamza, 4/11).
+                    waited = {i: waited.get(i, 0) + 1 for i in waiting - set(last_ai)} if a.auto else {}
                     for i in sorted(waited):
                         free = [n for n in fig_pads if n not in seated and n not in last_ai.values()]
                         if waited[i] >= WAIT_PICK and free:

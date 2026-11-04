@@ -95,7 +95,6 @@ private:
     Swapchain swapchain;
     PresentManager present_manager;
     BlitScreen blit_swapchain;
-    BlitScreen blit_capture;
     BlitScreen blit_applet;
     RasterizerVulkan rasterizer;
 #ifdef HAS_LSFG
@@ -105,9 +104,17 @@ private:
 
     Frame applet_frame;
 
-    // Kept between screenshots
-    Frame screenshot_frame;
-    vk::Buffer screenshot_buffer;
+    // One per screenshot size, kept between screenshots: a blit to another size rebuilds its passes
+    // and frame, and the Qualcomm driver dereferences null when it fails to set up a new framebuffer
+    // in vkCmdBeginRenderPass.
+    struct ScreenshotTarget {
+        u32 width;
+        u32 height;
+        BlitScreen blit;
+        Frame frame{};
+        vk::Buffer buffer;
+    };
+    std::vector<std::unique_ptr<ScreenshotTarget>> screenshot_targets;
 };
 
 } // namespace Vulkan

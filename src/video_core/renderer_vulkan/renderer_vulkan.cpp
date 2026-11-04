@@ -167,12 +167,6 @@ try
                    present_manager,
                    scheduler,
                    PresentFiltersForDisplay)
-    , blit_capture(device_memory,
-                   device,
-                   memory_allocator,
-                   present_manager,
-                   scheduler,
-                   PresentFiltersForDisplay)
     , blit_applet(device_memory,
                   device,
                   memory_allocator,
@@ -287,18 +281,31 @@ void RendererVulkan::RenderScreenshot(std::span<const Tegra::FramebufferConfig> 
         framebuffers, renderer_settings.screenshot_layer_stack, screenshot_layer_scratch);
 
     const auto& layout{renderer_settings.screenshot_framebuffer_layout};
-    const VkDeviceSize size = VkDeviceSize{layout.width} * layout.height * 4;
-    if (!screenshot_buffer || screenshot_buffer.Mapped().size() != size) {
-        screenshot_buffer = CreateWrappedBuffer(memory_allocator, size, MemoryUsage::Download);
+    auto it = std::ranges::find_if(screenshot_targets, [&](const auto& target) {
+        return target->width == layout.width && target->height == layout.height;
+    });
+    if (it == screenshot_targets.end()) {
+        // The previous screenshots were finished, so the oldest target is idle.
+        constexpr size_t MaxScreenshotTargets = 4;
+        if (screenshot_targets.size() == MaxScreenshotTargets) {
+            screenshot_targets.erase(screenshot_targets.begin());
+        }
+        const VkDeviceSize size = VkDeviceSize{layout.width} * layout.height * 4;
+        screenshot_targets.emplace_back(new ScreenshotTarget{
+            layout.width, layout.height,
+            BlitScreen{device_memory, device, memory_allocator, present_manager, scheduler,
+                       PresentFiltersForDisplay},
+            {}, CreateWrappedBuffer(memory_allocator, size, MemoryUsage::Download)});
+        it = std::prev(screenshot_targets.end());
     }
-    // The frame is kept between screenshots: a new one, of no size yet, made the blit idle the
-    // device and rebuild its passes for each of them.
-    scheduler.RequestOutsideRenderPassOperationContext();
-    blit_capture.DrawToFrame(device, rasterizer, &screenshot_frame, screenshot_layers, layout, 1,
-                             VK_FORMAT_B8G8R8A8_UNORM);
+    ScreenshotTarget& target = **it;
 
     scheduler.RequestOutsideRenderPassOperationContext();
-    scheduler.Record([image = *screenshot_frame.image, buffer = *screenshot_buffer,
+    target.blit.DrawToFrame(device, rasterizer, &target.frame, screenshot_layers, layout, 1,
+                            VK_FORMAT_B8G8R8A8_UNORM);
+
+    scheduler.RequestOutsideRenderPassOperationContext();
+    scheduler.Record([image = *target.frame.image, buffer = *target.buffer,
                       extent = VkExtent3D{layout.width, layout.height, 1}](vk::CommandBuffer cmdbuf) {
         DownloadColorImage(cmdbuf, image, buffer, extent);
     });
@@ -306,9 +313,9 @@ void RendererVulkan::RenderScreenshot(std::span<const Tegra::FramebufferConfig> 
     // Done within this frame: a game bridge client in lockstep holds the next one until it gets
     // the screenshot.
     scheduler.Finish();
-    screenshot_buffer.Invalidate();
-    std::memcpy(renderer_settings.screenshot_bits, screenshot_buffer.Mapped().data(),
-                screenshot_buffer.Mapped().size());
+    target.buffer.Invalidate();
+    std::memcpy(renderer_settings.screenshot_bits, target.buffer.Mapped().data(),
+                target.buffer.Mapped().size());
     renderer_settings.screenshot_complete_callback(false);
     renderer_settings.screenshot_requested = false;
 }

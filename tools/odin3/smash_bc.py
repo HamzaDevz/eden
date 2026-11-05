@@ -57,12 +57,16 @@ SPECIAL = 0x1DC
 DODGE = range(0x1F, 0x24)  # spot dodge, rolls and air dodges: intangible
 FALL_SPECIAL = 0x10  # helpless after the up special
 RUNNING = (0x3, 0x4)  # dash, run
+# Ledge statuses read off the CPU 9's matches on 5/11: catch and hang, then the getup attack (66
+# frames, ending 74 from the middle), the getup (34, ending 74), the roll (45, ending 42), the jump.
+CLIFF_HANG = (0x76, 0x77)
+CLIFF_ATTACK, CLIFF_CLIMB, CLIFF_ROLL = 0x78, 0x79, 0x7A
 JUMPS = 2  # Mario's, the one from the ground counted: walking off the stage spends it
 # The agent reads a frame late and its press comes out a few frames on: the other fighter is
 # looked for where the last frame's speeds take both fighters this many frames ahead.
 LEAD = 4
 A, B, X, ZR = 0x1, 0x2, 0x4, 0x200
-RULES = 6  # version of Agent.rules, kept in the match header
+RULES = 7  # version of Agent.rules, kept in the match header
 # One FIG per fighter (Hamza, 3/11: Mario, Ganondorf, Link, Zelda, Little Mac, Bowser): what the
 # rules take from the fighter they play, by fighter kind. reach: how far its moves hit against
 # Mario's (the distances the rules test are divided by it); shot: its press from afar ("n" neutral
@@ -70,13 +74,23 @@ RULES = 6  # version of Agent.rules, kept in the match header
 # ledge it falls before its up special; hop: short hops in with aerials (Little Mac's are weak);
 # smash_at: the damage it smashes from; aim: its up special goes where the stick points (Zelda's
 # Farore's Wind). Kinds read off the logs of 2/11 (Bare's Ganondorf 0x18, Hamz's Little Mac 0x34).
+# From the pros' advice (5/11, ultimateframedata.com and the fighters' wikis): oos_b, how close its up
+# special out of shield hits for sure (Ganondorf's grabs too slowly); throw, its combo throw (-1 down,
+# 1 up) up to combo_until damage; side_b, its side special gives distance back (Little Mac's); "d"
+# shots are Zelda's Phantom, charged.
 FIGHTERS = {
-    0x00: dict(reach=1.0, shot="n", up_b=-45, hop=True, smash_at=90, aim=False),  # Mario
-    0x18: dict(reach=1.25, shot=None, up_b=-30, hop=True, smash_at=75, aim=False),  # Ganondorf
-    0x02: dict(reach=1.35, shot="s", up_b=-20, hop=True, smash_at=95, aim=False),  # Link, boomerang
-    0x11: dict(reach=1.1, shot=None, up_b=-40, hop=True, smash_at=95, aim=True),  # Zelda
-    0x34: dict(reach=0.95, shot=None, up_b=-15, hop=False, smash_at=80, aim=False),  # Little Mac
-    0x0f: dict(reach=1.25, shot=None, up_b=-30, hop=True, smash_at=80, aim=False),  # Bowser
+    0x00: dict(reach=1.0, shot="n", up_b=-45, hop=True, smash_at=90, aim=False,  # Mario
+               oos_b=8, throw=-1, combo_until=70, side_b=False),
+    0x18: dict(reach=1.25, shot=None, up_b=-30, hop=True, smash_at=75, aim=False,  # Ganondorf
+               oos_b=0, throw=-1, combo_until=55, side_b=False),
+    0x02: dict(reach=1.35, shot="s", up_b=-20, hop=True, smash_at=95, aim=False,  # Link, boomerang
+               oos_b=7, throw=-1, combo_until=50, side_b=False),
+    0x11: dict(reach=1.1, shot="d", up_b=-40, hop=True, smash_at=95, aim=True,  # Zelda
+               oos_b=10, throw=-1, combo_until=60, side_b=False),
+    0x34: dict(reach=0.95, shot=None, up_b=-15, hop=False, smash_at=80, aim=False,  # Little Mac
+               oos_b=9, throw=-1, combo_until=40, side_b=True),
+    0x0f: dict(reach=1.25, shot=None, up_b=-30, hop=True, smash_at=80, aim=False,  # Bowser
+               oos_b=14, throw=1, combo_until=50, side_b=False),
 }
 # The rest of the rules' distances and timings, the same for all: shield_at, how close an attack
 # raises the shield; poke_wait, frames between pokes; approach_at and approach_wait, from how far and
@@ -240,7 +254,38 @@ class Agent:
     def reset(self):
         self.h, self.prev = None, None
         self.stick, self.buttons = [BINS // 2] * 2, [0.0] * len(BUTTON_BITS)
-        self.sent, self.wait, self.fire = (0, 0.0, 0.0), 0, 0
+        self.sent, self.wait, self.fire, self.charge = (0, 0.0, 0.0), 0, 0, 0
+        # What watch() keeps across frames: the other fighter's frames in its status, in the air,
+        # hanging and how long its ledge intangibility lasts, its ledge grabs since it last stood;
+        # ours: frames since a spot dodge and hanging, and the choices made for the airtime.
+        self.o_t = self.o_air = self.o_hang = self.o_inv = self.o_grabs = 0
+        self.dodge_t, self.hang = 99, 0
+        self.getup = self.land = self.up_b = None
+        self.side_b = False
+
+    def watch(self, me, o, po):
+        self.o_t = self.o_t + 1 if o.status == po.status else 0
+        if o.status in CLIFF_HANG:
+            if po.status not in CLIFF_HANG:
+                # Its ledge intangibility (ssbwiki's Edge): longer at low damage and after a long
+                # time in the air, shorter on each grab again without standing.
+                share = (1.0, 0.8, 0.5, 0.0)[min(self.o_grabs, 3)]
+                self.o_inv = share * (19 + 44 * (1 - min(o.damage, 120) / 120) + 60 * min(self.o_air, 300) / 300)
+                self.o_hang, self.o_grabs = 0, self.o_grabs + 1
+            self.o_hang += 1
+        self.o_air = 0 if o.situation == 0 else self.o_air + 1
+        if o.situation == 0:
+            self.o_grabs = 0
+        self.dodge_t += 1
+        self.hang = self.hang + 1 if me.status in CLIFF_HANG else 0
+        if me.status not in CLIFF_HANG:
+            self.getup = None
+        if me.situation == 0:
+            # Each airtime its own up special height (pros: vary the recovery) and landing.
+            self.land, self.side_b = None, False
+            self.up_b = min(self.f["up_b"] + self.rng.uniform(-10, 10), -5)
+        if me.hitstun > 0:
+            self.charge = 0
 
     def recover(self, me, prev):
         """The way back to the stage, or None above it.
@@ -268,7 +313,10 @@ class Agent:
         mask = self.sent[0]
         if me.y < prev.y and me.jumps < JUMPS:
             return (0 if mask & X else X), float(lx), 0.0
-        if me.y < prev.y and (ax < EDGE + 15 and me.y < 0 or me.y < self.f["up_b"]):
+        if me.y < prev.y and self.f["side_b"] and not self.side_b and ax > EDGE + 20 and me.y > -60:
+            self.side_b = True
+            return B, float(-side), 0.0  # side special toward the stage: once an airtime, not helpless
+        if me.y < prev.y and (ax < EDGE + 15 and me.y < 0 or me.y < (self.up_b or self.f["up_b"])):
             return (0 if mask & B else B), lx * 0.25, 1.0  # up special, a little toward the stage
         return 0, float(lx), 0.0
 
@@ -284,7 +332,12 @@ class Agent:
         jabs, tilts and grabs back turned hit 3 to 5 %, on a fighter in the air 4 to 11 %, and
         grabs, 7 a minute against 1 for the CPU, held 13 % (the CPU 50 %). So every move waits to
         face the other fighter where it will be, ground moves for a fighter on the ground, and
-        nothing is thrown at a dodge."""
+        nothing is thrown at a dodge.
+
+        v7 plays the pros' advice gathered on 5/11: ledge traps by reaction, hits on a fighter still
+        hanging once its intangibility ends or snapping to the ledge helpless, DI away from combos,
+        mixed options out of shield and from the ledge, throws into combos, kills sooner near a
+        ledge, whiffs and missed grabs punished, and landings away from a fighter waiting below."""
         # Where the other fighter will be against us when the move comes out.
         px = o.x - me.x + LEAD * (o.x - po.x - me.x + pme.x)
         py = o.y - me.y + LEAD * (o.y - po.y - me.y + pme.y)
@@ -297,6 +350,8 @@ class Agent:
         prev_mask, plx, ply = self.sent
         neutral = abs(plx) < 0.2 and abs(ply) < 0.2
         self.wait, self.fire = max(0, self.wait - 1), max(0, self.fire - 1)
+        # Kill moves from less damage near a ledge, facing it (pros: 20 to 30 % sooner).
+        kill = f["smash_at"] - (25 if abs(o.x) > 55 and side == np.sign(o.x) else 0)
 
         def press(mask, lx=0.0, ly=0.0):
             # A and B must be released a frame to count again.
@@ -307,17 +362,42 @@ class Agent:
             return press(A, lx, ly) if neutral else (0, 0.0, 0.0)
 
         def shoot(cool):
+            if f["shot"] == "d":
+                self.fire, self.charge = 150, 45  # one Phantom at a time, charged
+                return press(B, 0.0, -1.0)
             self.fire = 60 if f["shot"] == "s" else cool  # a boomerang comes back first
             return press(B, float(side), 0.0) if f["shot"] == "s" else press(B)
 
         if me.status in HELD:
             return (A if prev_mask & A == 0 else 0), (1.0 if plx <= 0 else -1.0), 0.0  # mash out
         if me.hitstun > 0:
-            return 0, -np.sign(me.x) * 0.7, 0.7  # in, and up against the blast zone
+            # DI: away from the attacker at low damage, out of its combos, unless that carries us
+            # out past our ledge; at higher damage in, and up against the blast zone.
+            away = float(np.sign(me.x - o.x) or 1)
+            if me.damage < 70 and not (abs(me.x) > EDGE - 25 and away == np.sign(me.x)):
+                return 0, away, 0.0
+            return 0, -np.sign(me.x) * 0.7, 0.7
+        if self.charge:
+            self.charge = 0 if dx < 25 else self.charge - 1  # let it go on a fighter coming in
+            return B, 0.0, 0.0
         if me.status in HOLDING:
+            if o.damage < f["combo_until"]:
+                return 0, 0.0, float(f["throw"])  # the combo throw, the follow-ups below
             return 0, float(np.sign(me.x) or side), 0.0  # throw toward the nearest ledge
         if me.situation == 1:
-            return (0 if prev_mask & X else X), 0.0, 0.0  # jump from the ledge
+            # From the ledge one of the four getups, chosen on the catch, at a random moment:
+            # jump, getup, roll, getup attack (not into a fighter shielding at the ledge).
+            if me.status not in CLIFF_HANG:
+                return 0, 0.0, 0.0
+            if self.getup is None:
+                guarded = abs(o.x - me.x) < 35 and o.status in SHIELD
+                p = (0.4, 0.3, 0.3, 0.0) if guarded else (0.35, 0.25, 0.25, 0.15)
+                self.getup = int(self.rng.choice(4, p=p)), int(self.rng.integers(0, 15))
+            way, at = self.getup
+            if self.hang < at:
+                return 0, 0.0, 0.0
+            return ((0 if prev_mask & X else X, 0.0, 0.0), (0, -float(np.sign(me.x)), 0.0),
+                    (0 if prev_mask & ZR else ZR, 0.0, 0.0), press(A))[way]
         if me.situation != 0:
             # In the air: aerials on a fighter close by, else drift toward it, but never on out
             # past our own ledge: there an aerial carried v4 off the stage.
@@ -327,32 +407,90 @@ class Agent:
                 if dy > 8:
                     return press(A, 0.0, 1.0)  # up air
                 return press(A) if facing else press(A, -me.lr, 0.0)  # neutral or back air
+            if dy < -15 and dx < 40 and grounded:
+                # Above a fighter waiting below: half the airtimes drift away from it and fast
+                # fall, rather than land on it (pros: don't jump back to the middle).
+                if self.land is None:
+                    self.land = bool(self.rng.random() < 0.5)
+                if self.land:
+                    away = -float(side) if abs(me.x) < EDGE - 25 or side == np.sign(me.x) else 0.0
+                    return 0, away, (-1.0 if me.y < pme.y else 0.0)
             return 0, float(side), 0.0
         shielding = me.status in SHIELD
-        attacking = o.status in ATTACK or o.status >= SPECIAL
-        if shielding and me.shield < pme.shield - 1 and dx < 15:
-            return press(A | ZR)  # the shield took a hit up close: grab out of it
+        attacking = (o.status in ATTACK or o.status >= SPECIAL
+                     or o.status == CLIFF_ATTACK and self.o_t < 30)  # its hit comes around frame 25
+        if shielding and me.shield < pme.shield - 1 and dx < 16 and -10 < dy < 30:
+            # The shield took a hit up close (pros' advice): the up special if it surely hits, an
+            # up smash against what is above, else a grab or a jump into an aerial, mixed.
+            if abs(px) < f["oos_b"] and abs(py) < 20:
+                return press(B, 0.0, 1.0)
+            if dy > 10:
+                return smash(0.0, 1.0)
+            if dx < 12 and self.rng.random() < 0.5:
+                return press(A | ZR)
+            return press(X | ZR)  # the air rules take the aerial
         if dx < 22 and -10 < dy < 18 and o.status in GRAB:
-            return press(ZR, 0.0, -1.0)  # spot dodge the grab
+            # Spot dodge its grab, not twice in half a second (pros: it stales), then punish the miss.
+            if self.o_t < 8 and self.dodge_t > 30:
+                self.dodge_t = 0
+            if self.dodge_t < 3:
+                return ZR, 0.0, -1.0
+            if self.o_t >= 8 and facing and dx < 14:
+                return smash(side, 0.0) if o.damage > kill else press(A | ZR)
         if dx < f["shield_at"] and -10 < dy < 20 and attacking and me.shield > 15:
             return ZR, 0.0, 0.0
         o_off = abs(o.x) > EDGE + 5 or o.y < -5 and abs(o.x) > 50 and o.situation == 2
-        if o_off or o.situation == 1:
-            # At the ledge, facing out: fireballs while it is out there, then what gets up.
-            spot = np.sign(o.x) * (EDGE - 15)
+        getup = o.status in (CLIFF_CLIMB, CLIFF_ROLL, CLIFF_ATTACK)
+        if o_off or o.situation == 1 or getup:
+            # Ledge trap by reaction (pros' advice): wait out of reach of the getups facing the
+            # ledge, then hit each where it ends once it can be hit; hit the fighter still hanging
+            # once its intangibility is over, and the one snapping to the ledge helpless.
+            out = float(np.sign(o.x))
+            ledge = out * EDGE
+            spot = ledge - out * 16
+            if getup:
+                # Where it ends and when to start a grab to meet its first frame out of intangibility,
+                # a smash into the getup attack's 40 frames of lag.
+                end, at = {CLIFF_CLIMB: (6, 24), CLIFF_ROLL: (38, 33), CLIFF_ATTACK: (6, 30)}[o.status]
+                end = ledge - out * end
+                spot = end - out * 10
+                if self.o_t >= at and abs(end - me.x) < 14 * f["reach"]:
+                    if me.lr != np.sign(end - me.x):
+                        return 0, float(np.sign(end - me.x)) * 0.3, 0.0
+                    if o.status == CLIFF_ATTACK and o.damage > kill:
+                        return smash(float(np.sign(end - me.x)), 0.0)
+                    return press(A | ZR)
+            elif o.status in CLIFF_HANG and self.o_hang > self.o_inv + LEAD:
+                spot = ledge - out * 8
+                if abs(me.x - spot) < 4:
+                    return smash(0.0, -1.0)  # a down smash reaches the ledge
+            elif o_off and (o.status == FALL_SPECIAL or o.status >= SPECIAL) and abs(o.x) < EDGE + 30:
+                spot = ledge - out * 8
+                hx, hy = abs(o.x + 10 * (o.x - po.x)), o.y + 10 * (o.y - po.y)  # 10 frames on
+                if abs(me.x - spot) < 4 and abs(hx - EDGE - 8) < 10 and abs(hy + 8) < 12:
+                    return smash(0.0, -1.0)
             if abs(me.x - spot) > 4:
-                return 0, float(np.sign(spot - me.x)) * 0.6, 0.0
-            if me.lr != side:
-                return 0, side * 0.3, 0.0
+                return 0, float(np.sign(spot - me.x)) * (1.0 if getup else 0.6), 0.0
+            if me.lr != out:
+                return 0, out * 0.3, 0.0
             if o_off and f["shot"] and not self.fire:
                 return shoot(45)
             return 0, 0.0, 0.0
+        if (o.status in ATTACK and grounded and self.o_t >= 8 and f["shield_at"] <= dx < 40
+                and abs(dy) < 15 and not self.wait):
+            # Its attack missed us from out of shield reach: dash grab its lag (pros' whiff punish).
+            if facing and me.status in RUNNING:
+                self.wait = f["approach_wait"]
+                return press(A | ZR, float(side), 0.0)
+            return 0, float(side), 0.0
         close = dx < 22 and -10 < dy < 18
         if o.hitstun > 0 and dx < 20:
             if 5 < dy < 35 and dx < 12:
                 return press(A, 0.0, 0.45)  # up tilt
+            if f["hop"] and 20 < dy < 55:
+                return press(X, float(side) * 0.3, 0.0)  # jump after it: the air rules take the aerial
             if facing and abs(dy) < 8:
-                return smash(side, 0.0) if o.damage > f["smash_at"] + 10 else press(A)
+                return smash(side, 0.0) if o.damage > kill + 10 else press(A)
         if dx < 15 and 10 <= dy < 30 and o.situation == 2 and o.y < po.y:
             return smash(0.0, 1.0)  # up smash, Mario's head is intangible
         if close:
@@ -369,7 +507,7 @@ class Agent:
             if not self.wait and grounded:
                 self.wait = f["poke_wait"]
                 r = self.rng.random()
-                if o.damage > f["smash_at"] and abs(dy) < 8 and dx < 14 and r < 0.4:
+                if o.damage > kill and abs(dy) < 8 and dx < 14 and r < 0.4:
                     return smash(side, 0.0)
                 if dx < 12 and r > 0.8:
                     return press(A | ZR)  # grab
@@ -426,6 +564,7 @@ class Agent:
             if self.stick != [BINS // 2] * 2:
                 self.buttons[1] = 0.0
         self.f = styled(me.kind, getattr(self.model, "style", None))
+        self.watch(me, o, prev.get(other, o))
         back = self.recover(me, prev.get(self.me, me)) or self.rules(me, o, prev.get(self.me, me), prev.get(other, o))
         if back:
             mask, lx, ly = back

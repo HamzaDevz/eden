@@ -14,6 +14,7 @@
 #include <memory>
 #include <type_traits>
 #include "common/container/unordered_map.h"
+#include "common/container/unordered_set.h"
 #include <vector>
 
 #include "common/common_types.h"
@@ -148,6 +149,10 @@ private:
 
     void QueueVulkanPipelineCacheFlush();
 
+    void LogUsedPipeline(const GraphicsPipeline* pipeline);
+
+    void FlushUsedPipelines();
+
     const Device& device;
     Scheduler& scheduler;
     DescriptorPool& descriptor_pool;
@@ -179,6 +184,12 @@ private:
     std::chrono::steady_clock::time_point last_flush{};
     std::atomic<size_t> last_cache_size{};
     std::atomic_bool flush_in_flight{};
+
+    // Keys drawn with in each session, so that tools can tell which cached pipelines are still used
+    std::filesystem::path used_keys_filename;
+    ::Common::unordered_set<const GraphicsPipeline*> used_pipelines;
+    std::vector<u64> used_keys_pending;
+    std::chrono::steady_clock::time_point last_used_keys_flush{};
 
     Common::ThreadWorker workers;
     Common::ThreadWorker serialization_thread;

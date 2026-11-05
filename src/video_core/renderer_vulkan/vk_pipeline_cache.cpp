@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <ctime>
 #include <fstream>
 #include <iostream>
 #include <memory>
@@ -572,6 +573,8 @@ PipelineCache::PipelineCache(Tegra::MaxwellDeviceMemoryManager& device_memory_,
 }
 
 PipelineCache::~PipelineCache() {
+    FlushUsedPipelines();
+    serialization_thread.WaitForRequests();
     if (use_vulkan_pipeline_cache && !vulkan_pipeline_cache_filename.empty()) {
         serialization_thread.WaitForRequests();
         SerializeVulkanPipelineCache(vulkan_pipeline_cache_filename, vulkan_pipeline_cache,
@@ -638,6 +641,9 @@ void PipelineCache::LoadDiskResources(u64 title_id, std::stop_token stop_loading
         return;
     }
     pipeline_cache_filename = base_dir / "vulkan.bin";
+    // Each session starts with a 0 followed by its start time in seconds
+    used_keys_filename = base_dir / "vulkan_used.bin";
+    used_keys_pending = {0, static_cast<u64>(std::time(nullptr))};
 
     if (use_vulkan_pipeline_cache) {
         vulkan_pipeline_cache_filename = base_dir / "vulkan_pipelines.bin";
@@ -790,11 +796,42 @@ GraphicsPipeline* PipelineCache::CurrentGraphicsPipelineSlowPath() {
     if (!pipeline) {
         return nullptr;
     }
+    LogUsedPipeline(pipeline.get());
     if (current_pipeline) {
         current_pipeline->AddTransition(pipeline.get());
     }
     current_pipeline = pipeline.get();
     return BuiltPipeline(current_pipeline);
+}
+
+void PipelineCache::LogUsedPipeline(const GraphicsPipeline* pipeline) {
+    if (used_keys_filename.empty() || !used_pipelines.insert(pipeline).second) {
+        return;
+    }
+    // FNV-1a of the compared key bytes, cheap to recompute from vulkan.bin entries
+    u64 hash = 0xcbf29ce484222325ULL;
+    const auto* const bytes = reinterpret_cast<const u8*>(&graphics_key);
+    for (size_t i = 0; i < graphics_key.Size(); ++i) {
+        hash = (hash ^ bytes[i]) * 0x100000001b3ULL;
+    }
+    used_keys_pending.push_back(hash);
+    const auto now = std::chrono::steady_clock::now();
+    if (used_keys_pending.size() >= 64 || now - last_used_keys_flush >= std::chrono::seconds{5}) {
+        last_used_keys_flush = now;
+        FlushUsedPipelines();
+    }
+}
+
+void PipelineCache::FlushUsedPipelines() {
+    if (used_keys_pending.empty()) {
+        return;
+    }
+    serialization_thread.QueueWork([this, keys = std::move(used_keys_pending)] {
+        std::ofstream file(used_keys_filename, std::ios::binary | std::ios::app);
+        file.write(reinterpret_cast<const char*>(keys.data()),
+                   static_cast<std::streamsize>(keys.size() * sizeof(u64)));
+    });
+    used_keys_pending.clear();
 }
 
 GraphicsPipeline* PipelineCache::BuiltPipeline(GraphicsPipeline* pipeline) const noexcept {

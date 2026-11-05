@@ -5,7 +5,8 @@
 # passe des clés statiques en VIDS (les clés à attribut scaled restent statiques, repli Qualcomm).
 # Usage : vkcache.py stats <fichier>... | merge <sortie> <base v18> <autre>... | combine <sortie> <a> <b>
 #         | vids <sortie> <source v18> | eds1 <sortie> <source v18> | eds2 <sortie> <source v18> [--logic-op]
-import struct, sys
+#         | used <vulkan.bin> <vulkan_used.bin> | prune <sortie> <vulkan.bin> <vulkan_used.bin>
+import struct, sys, time
 
 MAGIC = b"yuzucach"
 COMPUTE = 5  # Shader::Stage::Compute
@@ -224,6 +225,65 @@ def combine(out, a, b2):
     stats(out)
 
 
+def key_size(st):
+    """FixedPipelineState::Size() : octets de l'état comparés par Eden."""
+    (raw1,) = struct.unpack_from("<I", st, 0)
+    if raw1 >> 6 & 1:  # xfb
+        return len(st)
+    if raw1 >> 5 & 1:  # VIDS
+        return 80 if raw1 >> 3 & 1 else 112
+    return 368 if raw1 & 1 else 432
+
+
+def key_hash(key):
+    """FNV-1a de la clé comparée, même calcul que PipelineCache::LogUsedPipeline."""
+    h = 0xCBF29CE484222325
+    for c in key[: ST + key_size(key[ST:])]:
+        h = ((h ^ c) * 0x100000001B3) & 0xFFFFFFFFFFFFFFFF
+    return h
+
+
+def used_sessions(path):
+    """vulkan_used.bin : par session un 0, l'heure de début, puis une empreinte par pipeline dessiné."""
+    u = open(path, "rb").read()
+    vals = struct.unpack_from(f"<{len(u) // 8}Q", u)
+    sessions = []
+    i = 0
+    while i < len(vals):
+        if vals[i] == 0 and i + 1 < len(vals):
+            sessions.append((vals[i + 1], set()))
+            i += 2
+            continue
+        if sessions:
+            sessions[-1][1].add(vals[i])
+        i += 1
+    return sessions
+
+
+def used(path, log):
+    b, ver, k, recs = load(path)
+    cache = {key_hash(b[e:f]) for s, e, f, st in recs if st != COMPUTE}
+    seen = set()
+    for t, keys in used_sessions(log):
+        seen |= keys & cache
+        print(f"{time.strftime('%d/%m %H:%M', time.localtime(t))} dessinées={len(keys)} "
+              f"du cache={len(keys & cache)} nouvelles={len(keys - cache)}")
+    print(f"clés graphiques={len(cache)} utilisées au moins une fois={len(seen)} "
+          f"({100 * len(seen) / max(1, len(cache)):.1f} %)")
+
+
+def prune(out, path, log):
+    """Garde le compute et les clés graphiques dessinées dans au moins une session du journal."""
+    b, ver, k, recs = load(path)
+    keep = set().union(*(keys for t, keys in used_sessions(log)))
+    blob = bytearray(b[:12])
+    for s, e, f, st in recs:
+        if st == COMPUTE or key_hash(b[e:f]) in keep:
+            blob += b[s:f]
+    open(out, "wb").write(blob)
+    stats(out)
+
+
 if __name__ == "__main__":
     if sys.argv[1] == "stats":
         for p in sys.argv[2:]:
@@ -236,5 +296,9 @@ if __name__ == "__main__":
         eds2(sys.argv[2], sys.argv[3], False, eds="eds1")
     elif sys.argv[1] == "vids":
         eds2(sys.argv[2], sys.argv[3], False, eds=False)
+    elif sys.argv[1] == "used":
+        used(sys.argv[2], sys.argv[3])
+    elif sys.argv[1] == "prune":
+        prune(sys.argv[2], sys.argv[3], sys.argv[4])
     else:
         merge(sys.argv[2], sys.argv[3], sys.argv[4:])

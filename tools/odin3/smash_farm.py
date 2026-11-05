@@ -230,7 +230,7 @@ class Instance:
             log(f"instance {self.k}: {name} {d:.1f}")
             if name == "dark":
                 time.sleep(2)
-            elif name == "unknown":
+            elif name in ("unknown", "challengers"):  # a challenger's select at boot: declined
                 play(b, LOST[lost % len(LOST)], pad=self.pad)
                 lost += 1
             elif name in ROUTE:

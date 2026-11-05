@@ -102,6 +102,9 @@ QUIT_CHECK = 180  # frames after QUIT: a match still on is unpaused and played o
 QUIT_WITHIN = 900  # frames for the match to show its GO (it may be loading)
 TRAIN = os.path.expanduser("~/smash-ai/train")  # termux_ultimus.sh passes --auto while it exists
 LOOK_EVERY = 60
+# The only game the AIs touch: in Mario vs. Donkey Kong (5/11) their controllers, plugged back in
+# every second, froze Eden.
+SMASH = "01006a800016e000"
 PLACED_FOR = 180  # frames an amiibo put back stays on the reader, for Smash to scan it
 WAIT_PICK = 3  # looks a FIG card nobody knows waits for its figurine before it gets a free AI's
 AMIIBO = "/storage/emulated/0/Android/data/com.miHoYo.Yuanshen.relWithDebInfo/files/amiibo"
@@ -488,6 +491,9 @@ def main():
     b = Bridge(a.host, a.port)
     b.ask("stream 0", "ok")  # drops the frames sent since the connection
     info = b.ask("info", "info").split()
+    if info[1] != SMASH:
+        log(f"{info[1]} is not Smash, nothing to play")
+        return
     b.ask("unwatch *", "ok")
     # entry count at +0, is_ready_go at +0x32, is_result_mode at +0x49
     b.ask(f"watch fm 0x50 {smash_state.FIGHTER_MANAGER} 0 0xa0", "ok")

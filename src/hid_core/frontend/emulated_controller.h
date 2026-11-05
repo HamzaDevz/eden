@@ -636,7 +636,9 @@ private:
     StickDevices virtual_stick_devices;
     ControllerMotionDevices virtual_motion_devices;
 
-    mutable std::mutex callback_mutex;
+    // Recursive: npad's callback connects the controller again when another thread disconnected
+    // it meanwhile, which triggers the callbacks again on the same thread
+    mutable std::recursive_mutex callback_mutex;
     ::Common::unordered_map<int, ControllerUpdateCallback> callback_list;
     int last_callback_key = 0;
 

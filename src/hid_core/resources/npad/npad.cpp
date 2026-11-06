@@ -67,6 +67,7 @@ NPad::~NPad() {
     for (std::size_t aruid = 0; aruid < AruidIndexMax; ++aruid) {
         for (std::size_t i = 0; i < controller_data[aruid].size(); ++i) {
             if (auto& controller = controller_data[aruid][i]; controller.device && controller.callback_key) {
+                controller.device->SetServiceMutex(nullptr);
                 controller.device->DeleteCallback(controller.callback_key);
             }
         }
@@ -1136,6 +1137,9 @@ void NPad::SetNpadExternals(std::shared_ptr<AppletResource> resource,
     for (auto& abstract_pad : abstracted_pads) {
         abstract_pad.SetExternals(&applet_resource_holder, nullptr, nullptr, nullptr, nullptr,
                                   &vibration_handler, &hid_core);
+    }
+    for (auto& controller : controller_data[0]) {
+        controller.device->SetServiceMutex(shared_mutex);
     }
 }
 

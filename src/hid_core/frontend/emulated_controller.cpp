@@ -1878,6 +1878,14 @@ NpadColor EmulatedController::GetNpadColor(u32 color) {
 }
 
 void EmulatedController::TriggerOnChange(ControllerTriggerType type, bool is_npad_service_update) {
+    // On a connection change npad's callback locks the HID service mutex: take it first, as
+    // NPad::OnUpdate does before connecting a controller, else the two deadlock
+    std::unique_lock<std::recursive_mutex> service_lock;
+    if (auto* const service = service_mutex.load(); service && is_npad_service_update &&
+        (type == ControllerTriggerType::Connected || type == ControllerTriggerType::Disconnected ||
+         type == ControllerTriggerType::All)) {
+        service_lock = std::unique_lock{*service};
+    }
     std::unique_lock lock{callback_mutex};
     for (auto const& p : callback_list) {
         auto const& poller = p.second;
@@ -1899,6 +1907,10 @@ void EmulatedController::DeleteCallback(int key) {
     auto const it = callback_list.find(key);
     ASSERT_MSG(it != callback_list.end(), "Tried to delete non-existent callback {}", key);
     callback_list.erase(it);
+}
+
+void EmulatedController::SetServiceMutex(std::recursive_mutex* mutex) {
+    service_mutex = mutex;
 }
 
 void EmulatedController::StatusUpdate() {

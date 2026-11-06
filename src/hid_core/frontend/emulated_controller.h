@@ -474,6 +474,12 @@ public:
      */
     void DeleteCallback(int key);
 
+    /**
+     * Sets the HID service mutex that the npad service's callbacks lock on a connection change
+     * @param mutex The mutex, taken before the callback one, or nullptr when the service is gone
+     */
+    void SetServiceMutex(std::recursive_mutex* mutex);
+
     /// Swaps the state of the turbo buttons and updates motion input
     void StatusUpdate();
 
@@ -641,6 +647,7 @@ private:
     mutable std::recursive_mutex callback_mutex;
     ::Common::unordered_map<int, ControllerUpdateCallback> callback_list;
     int last_callback_key = 0;
+    std::atomic<std::recursive_mutex*> service_mutex{nullptr};
 
     // Stores the current status of all controller input
     ControllerStatus controller;

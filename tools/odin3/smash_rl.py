@@ -31,6 +31,7 @@ import shutil
 import subprocess
 import sys
 import time
+import zlib
 
 import numpy as np
 import torch
@@ -193,7 +194,10 @@ def results(folder, ais=()):
     out, fresh = [], False
     for path in smash_dataset.recordings(folder):
         name = os.path.basename(path)
-        r = known[name] if name in known else result(path)
+        try:
+            r = known[name] if name in known else result(path)
+        except (OSError, EOFError, ValueError, zlib.error):  # cut short, as by a full disk
+            r = None
         if r and len(r) < 8:  # kept before the AI's name and opponent: read again
             with gzip.open(path, "rt") as f:
                 measured, ai = player(json.loads(f.readline()[2:]))

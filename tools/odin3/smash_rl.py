@@ -399,6 +399,7 @@ def loop(a):
     named = open(ai_file).read().strip() if os.path.exists(ai_file) else None
     turn = turns.index(named) if named in turns else 0  # a restarted loop goes on with the same AI
     falls = {}  # self_destructs() of the matches measured, by path
+    looked = {}  # matches of each candidate already judged
 
     def name_next(ai):
         """Tells smash_farm.py which AI to play, once its models exist: its instances restart on it."""
@@ -428,14 +429,21 @@ def loop(a):
             best, current = version(champion), version(a.out)
             # The champion's last matches, played next to the candidate's: ten matches measured
             # alone in the morning were lucky by 1.7 stocks, and no candidate could beat them.
-            theirs = [m for m in res if m.version == best][-2 * a.trial:]
-            mine = [m for m in res if m.version == current][-a.trial:]
+            theirs = [m for m in res if m.version == best][-a.reference:]
+            # Judged every --trial matches: one match scores within 0.2 of another while candidates
+            # differ by a few hundredths at most, and keeping a candidate at least as good on ten
+            # matches kept one in two by luck, Ultimus drifting down (8/11).
+            played = [m for m in res if m.version == current][:a.most]
+            mine = played[:len(played) // a.trial * a.trial]
             for m in mine + theirs:
                 if m.path not in falls:
                     falls[m.path] = self_destructs(m.path, m.me)
             # The true level decides (3/11): wins, spacing and speed.
-            score = lambda ms: sum(performance(m) - FALL * falls[m.path] for m in ms) / len(ms)
+            scores = lambda ms: np.array([performance(m) - FALL * falls[m.path] for m in ms])
+            score = lambda ms: scores(ms).mean()
             fell = lambda ms: sum(falls[m.path] for m in ms) / len(ms)
+            # How far luck alone takes the candidate's mean from the champion's.
+            noise = lambda: math.sqrt(scores(mine).var(ddof=1) / len(mine) + scores(theirs).var(ddof=1) / len(theirs))
             if len(theirs) >= a.trial and sum(m.won for m in theirs[-a.trial:]) >= a.wins:
                 if level < 9:
                     with open(level_file, "w") as f:
@@ -448,13 +456,19 @@ def loop(a):
                     log(f"{sum(m.won for m in theirs[-a.trial:])} wins in {a.trial} at level 9: self-play")
             if current == best:
                 train_apart(a)
-            elif len(mine) == a.trial and len(theirs) >= a.trial:
-                measure = (f"{current} scores {score(mine):.2f} against {score(theirs):.2f}, falls on its own "
+            elif len(mine) > looked.get(current, 0) and len(theirs) >= a.trial:
+                looked[current] = len(mine)
+                gap, margin = score(mine) - score(theirs), a.z * noise()
+                measure = (f"{current} scores {score(mine):.2f} in {len(mine)} against {score(theirs):.2f} in "
+                           f"{len(theirs)}, {gap:+.3f} for {margin:.3f} needed, falls on its own "
                            f"{fell(mine):.2f} a match against {fell(theirs):.2f}, at level {level}")
-                if score(mine) >= score(theirs):
+                if gap > margin:
                     deploy(a.out, champion)
                     shutil.copy(champion, champion.replace(".pt", f"-{current}.pt"))
                     log(f"{a.ai} {measure}: champion")
+                elif gap > 0 and len(mine) < a.most:  # promising: measured on
+                    log(f"{a.ai} {measure}: more matches")
+                    continue
                 else:
                     log(f"{a.ai} {measure}: dropped")
                 # The next AI plays while this one's next candidate trains.
@@ -462,9 +476,10 @@ def loop(a):
                 name_next(turns[turn % len(turns)])
                 train_apart(a)
                 continue
-            if (current, len(mine), len(theirs)) != waiting:  # rl.log moves while the matches come in
-                waiting = current, len(mine), len(theirs)
-                log(f"{a.ai} {current}: {len(mine)} of {a.trial} matches measured, champion {len(theirs)}")
+            if (current, len(played), len(theirs)) != waiting:  # rl.log moves while the matches come in
+                waiting = current, len(played), len(theirs)
+                log(f"{a.ai} {current}: {len(played)} of {looked.get(current, 0) + a.trial} matches measured, "
+                    f"champion {len(theirs)}")
             time.sleep(60)
         except MemoryError:  # other work on the PC took it all: wait for it to finish
             log("out of memory, next turn in 5 min")
@@ -497,7 +512,11 @@ def main():
     # Ultimus first (Hamza, 1/11): 16 turns in a row of 7 min against one of 13 for each other AI, four
     # candidates of its own for each one when they each had one in turn.
     ap.add_argument("--ais", default="Ultimus,Ganon,Link,Zelda,Mac,Bowser", help="the AIs the loop trains in turn")
-    ap.add_argument("--trial", type=int, default=10, help="matches that measure a model")
+    ap.add_argument("--trial", type=int, default=10, help="matches between two looks at a candidate")
+    ap.add_argument("--most", type=int, default=40, help="matches a candidate is measured on at most")
+    ap.add_argument("--reference", type=int, default=60, help="the champion's last matches it is compared to")
+    # 2.4 standard errors keep 3 candidates in 100 no better than their champion, over four looks (8/11).
+    ap.add_argument("--z", type=float, default=2.4, help="standard errors a candidate has to win by")
     ap.add_argument("--wins", type=int, default=6, help="champion wins in --trial that raise the level")
     a = ap.parse_args()
     {"train": train, "loop": loop, "stats": stats}[a.op](a)

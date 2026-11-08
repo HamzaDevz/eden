@@ -18,7 +18,11 @@ than the value head expected, weighted by exp(advantage / beta).
                       Each of the --ais has its own brain (smash_farm.models()), trained on its
                       own matches; they take turns, one candidate each (Name:k for k turns in a
                       row), the one whose turn it is named in ~/smash-ai/ai for smash_farm.py
+                      Each AI's choices between the rules' options are learned all along
+                      (learn_choices()), from every match it plays.
   smash_rl.py stats   the AIs' results, most recent last
+  smash_rl.py choices the choices learned: per AI, fighter, point and situation, each option's
+                      count and mean gain over the next HORIZON frames
 """
 import argparse
 import collections
@@ -224,6 +228,89 @@ def results(folder, ais=()):
     return out
 
 
+# Each choice the rules made (smash_bc.Agent.choose()) is scored by what followed it for HORIZON
+# frames: damage dealt minus taken (per 100 %), plus or minus one per stock taken or lost.
+HORIZON = 120
+LEARNED = 3000  # each AI's last matches its choices are learned from
+
+
+def choice_gains(path):
+    """{"ai|kind|point|situation|option": [choices, total gain]} of the AIs' choices in the match."""
+    with gzip.open(path, "rt") as f:
+        if (json.loads(f.readline()[2:]).get("rules") or 0) < 8:  # chose by fixed shares
+            return {}
+    d = smash_dataset.load(path)
+    rows = d["valid"].all(1).nonzero()[0]
+    if "choices" not in d or len(rows) < 2:
+        return {}
+    frames, out = d["frame"][rows], {}
+    dmg, stock = d["damage"][rows], d["stock"][rows]
+    for slot, side in json.loads(str(d["choices"])).items():
+        me = int(slot)
+        if me > 1:  # decoded one on one
+            continue
+        step = ((gain(dmg[:, 1 - me]) - gain(dmg[:, me])) / 100
+                + gain(-stock[:, 1 - me]) - gain(-stock[:, me]))
+        acc = np.r_[0, np.cumsum(step)]
+        kind = int(d["kind"][rows[-1], me])
+        for frame, point, ctx, way in side["made"]:
+            if frame is None:
+                continue
+            t0, t1 = np.searchsorted(frames, [frame, frame + HORIZON])
+            key = "|".join((side["ai"], str(kind), point, ctx, way))
+            n, total = out.get(key, (0, 0.0))
+            out[key] = [n + 1, round(total + float(acc[t1] - acc[t0]), 4)]
+    return out
+
+
+def learn_choices(folder):
+    """Writes each AI's models/<ai>-choices.json from the choices of its last LEARNED matches,
+    {fighter kind: {point: {situation: {option: [choices, mean gain]}}}}, for smash_bc.Agent."""
+    index = os.path.join(os.path.expanduser(folder), "choices.json")
+    try:
+        with open(index) as f:
+            known = json.load(f)
+        if known.get("horizon") != HORIZON:
+            known = {}
+    except (OSError, ValueError):
+        known = {}
+    known["horizon"], fresh = HORIZON, False
+    for path in smash_dataset.recordings(folder):
+        name = os.path.basename(path)
+        if name in known or time.time() - os.path.getmtime(path) < 60:  # the Odin's arrive by scp
+            continue
+        try:
+            known[name] = choice_gains(path)
+        except (OSError, EOFError, ValueError, zlib.error):
+            known[name] = {}
+        fresh = True
+    if fresh:
+        with open(index + ".tmp", "w") as f:
+            json.dump(known, f)
+        os.replace(index + ".tmp", index)
+    matches = collections.defaultdict(list)
+    for name in sorted(known):
+        for ai in {key.split("|")[0] for key in known[name]} if name != "horizon" else ():
+            matches[ai].append(name)
+    for ai, names in matches.items():
+        table = {}
+        for name in names[-LEARNED:]:
+            for key, (n, total) in known[name].items():
+                who, kind, point, ctx, way = key.split("|")
+                if who == ai:
+                    cell = table.setdefault(kind, {}).setdefault(point, {}).setdefault(ctx, {}).setdefault(way, [0, 0.0])
+                    cell[0], cell[1] = cell[0] + n, cell[1] + total
+        for options in (o for points in table.values() for ctxs in points.values() for o in ctxs.values()):
+            for way, (n, total) in options.items():
+                options[way] = [n, round(total / n, 4)]
+        path = os.path.join(HOME, "models", f"{ai.lower()}-choices.json")
+        text = json.dumps(table, sort_keys=True)
+        if not os.path.exists(path) or open(path).read() != text:
+            with open(path + ".tmp", "w") as f:
+                f.write(text)
+            os.replace(path + ".tmp", path)  # the recorders read it again between matches
+
+
 def current_level():
     path = os.path.join(HOME, "level")
     return int(open(path).read()) if os.path.exists(path) else 1
@@ -424,16 +511,19 @@ def loop(a):
             level = current_level()
             # Models are measured on the PC only: the Odin's matches train them but play by other rules.
             res = results(a.play, ais)
+            learn_choices(a.play)
             show_levels(res, ais)
             res = [m for m in res if m.level == level and m.measured and m.name == a.ai]
             best, current = version(champion), version(a.out)
-            # The champion's last matches, played next to the candidate's: ten matches measured
-            # alone in the morning were lucky by 1.7 stocks, and no candidate could beat them.
-            theirs = [m for m in res if m.version == best][-a.reference:]
+            champ = [m for m in res if m.version == best]
             # Judged every --trial matches: one match scores within 0.2 of another while candidates
             # differ by a few hundredths at most, and keeping a candidate at least as good on ten
             # matches kept one in two by luck, Ultimus drifting down (8/11).
             played = [m for m in res if m.version == current][:a.most]
+            # The champion's matches played next to the candidate's: ten matches measured alone in the
+            # morning were lucky by 1.7 stocks, and since 9/11 the choices learned meanwhile help both.
+            since = os.path.basename(played[0].path) if played else "~"
+            theirs = [m for m in champ if os.path.basename(m.path) >= since][-a.reference:]
             mine = played[:len(played) // a.trial * a.trial]
             for m in mine + theirs:
                 if m.path not in falls:
@@ -444,16 +534,16 @@ def loop(a):
             fell = lambda ms: sum(falls[m.path] for m in ms) / len(ms)
             # How far luck alone takes the candidate's mean from the champion's.
             noise = lambda: math.sqrt(scores(mine).var(ddof=1) / len(mine) + scores(theirs).var(ddof=1) / len(theirs))
-            if len(theirs) >= a.trial and sum(m.won for m in theirs[-a.trial:]) >= a.wins:
+            if len(champ) >= a.trial and sum(m.won for m in champ[-a.trial:]) >= a.wins:
                 if level < 9:
                     with open(level_file, "w") as f:
                         f.write(f"{level + 1}\n")
-                    log(f"{sum(m.won for m in theirs[-a.trial:])} wins in {a.trial} at level {level}: level {level + 1}")
+                    log(f"{sum(m.won for m in champ[-a.trial:])} wins in {a.trial} at level {level}: level {level + 1}")
                     continue
                 if not os.path.exists(phase) or open(phase).read().strip() != "selfplay":
                     with open(phase, "w") as f:
                         f.write("selfplay\n")
-                    log(f"{sum(m.won for m in theirs[-a.trial:])} wins in {a.trial} at level 9: self-play")
+                    log(f"{sum(m.won for m in champ[-a.trial:])} wins in {a.trial} at level 9: self-play")
             if current == best:
                 train_apart(a)
             elif len(mine) > looked.get(current, 0) and len(theirs) >= a.trial:
@@ -493,9 +583,21 @@ def stats(a):
     print(sum(m.won for m in res), "wins out of", len(res))
 
 
+def choices(a):
+    learn_choices(a.play)
+    for path in sorted(glob.glob(os.path.join(HOME, "models", "*-choices.json"))):
+        with open(path) as f:
+            table = json.load(f)
+        for kind, points in sorted(table.items()):
+            for point, ctxs in sorted(points.items()):
+                for ctx, options in sorted(ctxs.items()):
+                    print(os.path.basename(path)[:-13], f"{int(kind):#x}", point, ctx, "  ".join(
+                        f"{way} {mean:+.3f} ({n})" for way, (n, mean) in sorted(options.items(), key=lambda o: -o[1][1])))
+
+
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("op", choices=["train", "loop", "stats"])
+    ap.add_argument("op", choices=["train", "loop", "stats", "choices"])
     ap.add_argument("--rec", default=os.path.join(HOME, "rec"))
     ap.add_argument("--play", default=os.path.join(HOME, "play"))
     ap.add_argument("--init", default=os.path.join(HOME, "models/ultimus.pt"))
@@ -519,7 +621,7 @@ def main():
     ap.add_argument("--z", type=float, default=2.4, help="standard errors a candidate has to win by")
     ap.add_argument("--wins", type=int, default=6, help="champion wins in --trial that raise the level")
     a = ap.parse_args()
-    {"train": train, "loop": loop, "stats": stats}[a.op](a)
+    {"train": train, "loop": loop, "stats": stats, "choices": choices}[a.op](a)
 
 
 if __name__ == "__main__":

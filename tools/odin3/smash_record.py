@@ -24,8 +24,11 @@ learning count for nothing): the model does, and presses A on the results. An AI
 FIG card only, never from a player card on its controller. Back on the select,
 the card waits for its figurine again and gets the same AI's amiibo from here; a FIG card made by
 the AI's own hand comes back as that controller's player card, and the hand makes it FIG again.
-Matches with the model go to ~/smash-ai/play, the others to ~/smash-ai/rec. It also stops
-once smash_rl.py writes "selfplay" in ~/smash-ai/phase, for the CPU slot to become a player.
+With --duel, one of those AIs also takes the CPU card's place as each match starts, on its own
+controller with the CPU's fighter: AI against AI. Each AI's choices between the rules' options go
+after the match's frames (smash_bc.Agent.choose()). Matches with the model go to ~/smash-ai/play,
+the others to ~/smash-ai/rec. It also stops once smash_rl.py writes "selfplay" in
+~/smash-ai/phase, for the CPU slot to become a player.
 
 On a PC, --sync 1 makes the game wait for each frame to be handled, so an instance running
 without speed limit never outpaces the agent; --min-battery 0 skips the console checks.
@@ -39,6 +42,7 @@ import argparse
 import gzip
 import json
 import os
+import random
 import signal
 import subprocess
 import sys
@@ -306,6 +310,7 @@ def hash40(s):
     return len(s) << 32 | zlib.crc32(s.encode())
 
 
+
 # The amiibo character (the top 16 bits of an amiibo ID) of the AIs' fighters, by Smash's own
 FIGHTER_AMIIBO = {hash40(f"ui_chara_{c}"): a for c, a in (
     ("mario", 0x0000), ("link", 0x0100), ("zelda", 0x0101), ("ganon", 0x0102), ("koopa", 0x0005),
@@ -444,6 +449,8 @@ def main():
     ap.add_argument("--challengers", action="store_true", help="with --auto, from the door of "
                     "Challenger's Approach on Games & More, the agent fights them all as Mario")
     ap.add_argument("--selfplay", action="store_true", help="the agent plays every human slot")
+    ap.add_argument("--duel", help="with --pad, AIs (comma separated), one of which takes a CPU card "
+                    "as + starts each match, on its controller: AI against AI")
     ap.add_argument("--level", type=int, help="level of the CPU, kept in the match header")
     ap.add_argument("--cpu-level", type=int, help="with --pad, the level the CPU cards are "
                     "given as + starts the match, past Smash's 9 to see what it does")
@@ -484,8 +491,8 @@ def main():
                            name.lower() + os.path.splitext(a.agent)[1])
         first = (a.figs or a.name).split(",")[0]
         path = own if name != first and os.path.exists(own) else os.path.expanduser(a.agent)
-        if i not in agents or agents[i].path != path:
-            agents[i] = Agent(path, i)
+        if i not in agents or (agents[i].path, agents[i].name) != (path, name):
+            agents[i] = Agent(path, i, name)
         return agents[i]
 
     b = Bridge(a.host, a.port)
@@ -558,6 +565,13 @@ def main():
     kinds_until, kinds_last, converted = 0, 0, []  # the FIG cards made player cards on a + press
     a_looked = 0  # frame before which an A that started nothing is not looked at again
 
+    def set_cpu(i, pad):
+        """Card i a CPU's again on controller pad, after --duel made it an AI's."""
+        for pid, at in (("", smash_state.CARDS + i * smash_state.CARD_SIZE),
+                        ("copy", smash_state.CARD_PADS + i * smash_state.CARD_PAD_SIZE + smash_state.CARD_COPY)):
+            b.poke(f"kind{pid}{i}", smash_state.CPU.to_bytes(4, "little"), f"main+{at + smash_state.CARD_KIND:#x}")
+        b.poke(f"pad{i}", pad.to_bytes(4, "little", signed=True), f"main+{smash_state.CARD_PADS + i * smash_state.CARD_PAD_SIZE:#x}")
+
     def ready_banner():
         """Whether the character select shows the banner an A starts the match from."""
         nonlocal a_looked
@@ -572,6 +586,7 @@ def main():
         shot = smash_farm.grab(b)
         return bool(shot) and smash_farm.screen(shot[0], refs)[0] == "dark"
     figs_back, back_until = [], 0  # the AIs' cards made FIG cards again after a match
+    duel, duel_back = {}, []  # --duel: the CPU card an AI plays (card: AI, its controller before), after it
     next_ok, ok_until = 0, 0  # the AIs' A on the results
     next_board = 0  # the next sending of the results' rows of points
     next_plug = 0  # the next check of the AIs' controllers
@@ -609,7 +624,8 @@ def main():
                 for i in fighters if fig_pads else ():
                     raw = f.watches.get(f"{i}npad")
                     pad = int.from_bytes(raw, "little", signed=True) if raw else -1
-                    if pad in pad_figs and not fighters[i].cpu and (pad_figs[pad], pad) in from_figs:
+                    if pad in pad_figs and not fighters[i].cpu and ((pad_figs[pad], pad) in from_figs
+                                                                    or duel.get(i, ("",))[0] == pad_figs[pad]):
                         figs[i] = pad_figs[pad]
                 if badges:
                     badges.show(b, f)
@@ -635,7 +651,7 @@ def main():
                             return
                         if i == me or (not x.cpu and a.selfplay):
                             if i not in agents:
-                                agents[i] = Agent(a.agent, i)
+                                agents[i] = Agent(a.agent, i, a.name)
                             active[i] = agents[i]
                 pads = {i: fig_pads[figs[i]] if figs else i for i in active}
                 # Training reads one AI on one against anyone, people too (their wins show its
@@ -655,6 +671,8 @@ def main():
                           "version": next(iter(active.values())).model.version if active else None,
                           "rules": next(iter(active.values())).RULES if active else None}
                 out.write("# " + json.dumps(header) + "\n")
+                for ag in active.values():
+                    ag.chosen = []
                 frames, gaps, last = 0, 0, None
                 who = figs or ({me: a.name} if me is not None else {})
                 log(f"match -> {path}" + "".join(f", {n} is player {i + 1}" for i, n in who.items()))
@@ -668,6 +686,10 @@ def main():
                         gaps += 1
                     last = f.index
                 else:
+                    # The rules' choices last, for smash_rl.learn_choices() to score each by what followed.
+                    made = {i: dict(ai=ag.name, made=ag.chosen) for i, ag in active.items() if ag.chosen}
+                    if made:
+                        out.write("# choices " + json.dumps(made) + "\n")
                     out.close()
                     os.rename(path + ".part", path)
                     out = None
@@ -693,6 +715,10 @@ def main():
                     if figs_back:
                         back_until = f.index + BACK_FOR
                         log("back to FIG cards: " + ", ".join(f"card {i + 1}" for i in figs_back))
+                    duel_back, duel = list(duel.items()), {}
+                    for i, (_, pad0) in duel_back:
+                        set_cpu(i, pad0)
+                    back_until = f.index + BACK_FOR if duel_back else back_until
                     if any([ag.reload() for ag in agents.values()]):
                         log("model reloaded")
                     if tag_seen is not None:
@@ -739,7 +765,7 @@ def main():
             elif active and len(fighters) > 1:
                 for i, ag in active.items():
                     if i in fighters:
-                        b.pad(pads[i], *ag.act(fighters))
+                        b.pad(pads[i], *ag.act(fighters, f.index))
 
             if badges and badges.board and f.index >= next_board:
                 badges.results(b, bool(result) and count >= 2)
@@ -788,7 +814,11 @@ def main():
                         b.poke(f"kindcopy{i}", smash_state.FIG.to_bytes(4, "little"), f"main+{smash_state.CARD_PADS + i * smash_state.CARD_PAD_SIZE + smash_state.CARD_COPY + smash_state.CARD_KIND:#x}")
                     figs_back, back_until, kinds_until = list(converted), f.index + BACK_FOR, 0
                     log("no match: back to FIG cards: " + ", ".join(f"card {i + 1}" for i in figs_back))
-                elif count == 0 and not kinds_until and not figs_back and f.index >= a_looked and any(
+                    # The PC, uncapped, often starts the match only after: the duel stays known for it.
+                    duel_back = list(duel.items())
+                    for i, (_, pad0) in duel_back:
+                        set_cpu(i, pad0)
+                elif count == 0 and not kinds_until and not figs_back and not duel_back and f.index >= a_looked and any(
                         p[0] & (BUTTON_PLUS | BUTTON_A) for k, p in f.pads.items()
                         if k not in pad_figs or a.auto) and (any(
                         p[0] & BUTTON_PLUS for k, p in f.pads.items() if k not in pad_figs or a.auto)
@@ -814,19 +844,34 @@ def main():
                             for pid, at in ((f"level{i}", smash_state.CARDS + i * smash_state.CARD_SIZE),
                                             (f"levelcopy{i}", smash_state.CARD_PADS + i * smash_state.CARD_PAD_SIZE + smash_state.CARD_COPY)):
                                 b.poke(pid, bytes([a.cpu_level]), f"main+{at + smash_state.CARD_LEVEL:#x}")
+                    duel = {}
+                    for i, (kind, _) in smash_state.cards(f).items() if a.duel and converted else ():
+                        free = [n for n in a.duel.split(",") if n in fig_pads and n not in converted.values()]
+                        if kind == smash_state.CPU and free and not duel:
+                            # A player card on the AI's controller, as the FIG cards. It keeps the CPU's
+                            # random fighter: its hash40 poked on both cards changed nothing (9/11).
+                            ai = random.choice(free)
+                            for pid, at in (("", smash_state.CARDS + i * smash_state.CARD_SIZE),
+                                            ("copy", smash_state.CARD_PADS + i * smash_state.CARD_PAD_SIZE + smash_state.CARD_COPY)):
+                                b.poke(f"kind{pid}{i}", bytes(4), f"main+{at + smash_state.CARD_KIND:#x}")
+                            b.poke(f"pad{i}", fig_pads[ai].to_bytes(4, "little", signed=True),
+                                   f"main+{smash_state.CARD_PADS + i * smash_state.CARD_PAD_SIZE:#x}")
+                            duel[i] = ai, owners.get(i, ("", -1))[1]
                     if converted:
                         kinds_until, kinds_last = f.index + KINDS_FOR, f.index + BACK_FOR
-                        log("+: " + ", ".join(f"card {i + 1} is {n}'s" for i, n in converted.items()))
-                elif count == 0 and figs_back and f.index >= next_look:
+                        log("+: " + ", ".join(f"card {i + 1} is {n}'s" for i, n in [*converted.items(), *((i, d[0]) for i, d in duel.items())]))
+                elif count == 0 and (figs_back or duel_back) and f.index >= next_look:
                     # Let go once the character select shows them: it writes the kinds itself.
                     next_look = f.index + LOOK_EVERY
                     shot = smash_farm.grab(b)
                     if f.index >= back_until or shot and smash_farm.screen(shot[0], refs)[0] in ("css", "ready"):
-                        for i in figs_back:
+                        for i in figs_back + [i for i, _ in duel_back]:
                             b.unpoke(f"kind{i}")
                             b.unpoke(f"kindcopy{i}")
+                        for i, _ in duel_back:
+                            b.unpoke(f"pad{i}")
                         log("FIG cards let go on the character select")
-                        figs_back = []
+                        figs_back, duel_back = [], []
                 elif count == 0 and f.index >= next_look:
                     next_look = f.index + LOOK_EVERY
                     now, owners = smash_state.cards(f), card_owners(f)

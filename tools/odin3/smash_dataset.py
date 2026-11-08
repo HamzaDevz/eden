@@ -27,6 +27,9 @@ def decode(path, players=2):
     with gzip.open(path, "rt") as f:
         header = json.loads(f.readline()[2:])
         lines = f.readlines()
+    # After the frames, the AIs' choices (smash_record.py), kept as their JSON.
+    notes = [line for line in lines if line.startswith("#")]
+    lines = [line for line in lines if not line.startswith("#")]
     n = len(lines)
     out = {name: np.zeros((n, players), np.float32) for name in SCALARS}
     out["motion"] = np.zeros((n, players), np.uint64)
@@ -52,6 +55,9 @@ def decode(path, players=2):
                 if data is not None:
                     out[name][t, i] = struct.unpack(fmt, data)
     out["build"] = np.array(header["build"])
+    for note in notes:
+        if note.startswith("# choices "):
+            out["choices"] = np.array(note[len("# choices "):].strip())
     return out
 
 

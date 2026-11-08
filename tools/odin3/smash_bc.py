@@ -66,7 +66,13 @@ JUMPS = 2  # Mario's, the one from the ground counted: walking off the stage spe
 # looked for where the last frame's speeds take both fighters this many frames ahead.
 LEAD = 4
 A, B, X, ZR = 0x1, 0x2, 0x4, 0x200
-RULES = 7  # version of Agent.rules, kept in the match header
+RULES = 8  # version of Agent.rules, kept in the match header
+# Since v8 (9/11) the rules' choices between options (ledge getups, out of shield, pokes, landings,
+# approaches) are learned: each AI favors, by fighter and situation, the options that did better
+# after being chosen (smash_rl.learn_choices(), in models/<ai>-choices.json), by exp(gain / TASTE)
+# over their v7 share, shrunk toward the situation's mean by SHRINK choices, and keeps EXPLORE of
+# its choices spread evenly for the others to stay measured.
+TASTE, SHRINK, EXPLORE = 0.1, 30, 0.1
 # One FIG per fighter (Hamza, 3/11: Mario, Ganondorf, Link, Zelda, Little Mac, Bowser): what the
 # rules take from the fighter they play, by fighter kind. reach: how far its moves hit against
 # Mario's (the distances the rules test are divided by it); shot: its press from afar ("n" neutral
@@ -232,9 +238,11 @@ class Agent:
     STATE = ("kind", "status", "situation", "x", "y", "lr", "damage", "stock", "motion_frame",
              "stick_x", "stick_y", "buttons", *smash_state.EYES)
 
-    def __init__(self, path, me):
+    def __init__(self, path, me, name="Ultimus"):
         self.path, self.mtime = os.path.expanduser(path), None
-        self.me, self.rng = me, np.random.default_rng()
+        self.me, self.rng, self.name = me, np.random.default_rng(), name
+        self.choices = os.path.join(os.path.dirname(self.path), f"{name.lower()}-choices.json")
+        self.table, self.tmtime, self.chosen, self.frame = {}, None, [], None
         # One small step per frame: more threads only spun, 12 ms a frame instead of 1.5 on the
         # PC, and in lockstep the game waited for them.
         if torch:
@@ -243,7 +251,15 @@ class Agent:
         self.reset()
 
     def reload(self):
-        """Loads the model again if its file changed, True when it did."""
+        """Loads the model again if its file changed, True when it did, and the learned choices."""
+        tmtime = os.path.getmtime(self.choices) if os.path.exists(self.choices) else None
+        if tmtime != self.tmtime:
+            try:
+                with open(self.choices) as f:
+                    self.table = json.load(f)
+                self.tmtime = tmtime
+            except (OSError, ValueError):  # being replaced: next time
+                pass
         mtime = os.path.getmtime(self.path)
         if mtime == self.mtime:
             return False
@@ -262,6 +278,7 @@ class Agent:
         self.dodge_t, self.hang = 99, 0
         self.getup = self.land = self.up_b = None
         self.side_b = False
+        self.chosen = []  # [frame, point, situation, option] of each choice this match
 
     def watch(self, me, o, po):
         self.o_t = self.o_t + 1 if o.status == po.status else 0
@@ -286,6 +303,21 @@ class Agent:
             self.up_b = min(self.f["up_b"] + self.rng.uniform(-10, 10), -5)
         if me.hitstun > 0:
             self.charge = 0
+
+    def choose(self, point, ctx, prior):
+        """One of prior's options (name: its v7 share) at decision point `point` in situation ctx,
+        logged with the frame for smash_rl.learn_choices() to score what followed."""
+        if len(prior) == 1:
+            return next(iter(prior))
+        seen = self.table.get(str(self.kind), {}).get(point, {}).get(ctx, {})
+        n = sum(seen.get(k, (0, 0))[0] for k in prior)
+        mean = sum(seen.get(k, (0, 0))[0] * seen.get(k, (0, 0))[1] for k in prior) / max(n, 1)
+        gains = [(lambda c, m: (c * m + SHRINK * mean) / (c + SHRINK))(*seen.get(k, (0, 0))) for k in prior]
+        w = np.array(list(prior.values())) * np.exp((np.array(gains) - max(gains)) / TASTE)
+        p = (1 - EXPLORE) * w / w.sum() + EXPLORE / len(prior)
+        way = list(prior)[int(self.rng.choice(len(prior), p=p))]
+        self.chosen.append([self.frame, point, ctx, way])
+        return way
 
     def recover(self, me, prev):
         """The way back to the stage, or None above it.
@@ -390,14 +422,16 @@ class Agent:
             if me.status not in CLIFF_HANG:
                 return 0, 0.0, 0.0
             if self.getup is None:
-                guarded = abs(o.x - me.x) < 35 and o.status in SHIELD
-                p = (0.4, 0.3, 0.3, 0.0) if guarded else (0.35, 0.25, 0.25, 0.15)
-                self.getup = int(self.rng.choice(4, p=p)), int(self.rng.integers(0, 15))
+                near = abs(o.x - me.x) < 35
+                guarded = near and o.status in SHIELD
+                prior = dict(jump=0.35, climb=0.25, roll=0.25, **({} if guarded else dict(attack=0.15)))
+                ctx = "guarded" if guarded else "near" if near else "far"
+                self.getup = self.choose("getup", ctx, prior), int(self.rng.integers(0, 15))
             way, at = self.getup
             if self.hang < at:
                 return 0, 0.0, 0.0
-            return ((0 if prev_mask & X else X, 0.0, 0.0), (0, -float(np.sign(me.x)), 0.0),
-                    (0 if prev_mask & ZR else ZR, 0.0, 0.0), press(A))[way]
+            return dict(jump=(0 if prev_mask & X else X, 0.0, 0.0), climb=(0, -float(np.sign(me.x)), 0.0),
+                        roll=(0 if prev_mask & ZR else ZR, 0.0, 0.0), attack=press(A))[way]
         if me.situation != 0:
             # In the air: aerials on a fighter close by, else drift toward it, but never on out
             # past our own ledge: there an aerial carried v4 off the stage.
@@ -411,7 +445,7 @@ class Agent:
                 # Above a fighter waiting below: half the airtimes drift away from it and fast
                 # fall, rather than land on it (pros: don't jump back to the middle).
                 if self.land is None:
-                    self.land = bool(self.rng.random() < 0.5)
+                    self.land = self.choose("land", "above", dict(away=0.5, on=0.5)) == "away"
                 if self.land:
                     away = -float(side) if abs(me.x) < EDGE - 25 or side == np.sign(me.x) else 0.0
                     return 0, away, (-1.0 if me.y < pme.y else 0.0)
@@ -424,11 +458,12 @@ class Agent:
             # up smash against what is above, else a grab or a jump into an aerial, mixed.
             if abs(px) < f["oos_b"] and abs(py) < 20:
                 return press(B, 0.0, 1.0)
-            if dy > 10:
+            ctx = "above" if dy > 10 else "near" if dx < 12 else "far"
+            way = self.choose("oos", ctx, dict(above=dict(usmash=0.8, jump=0.2), near=dict(grab=0.5, jump=0.4, usmash=0.1),
+                                               far=dict(jump=0.8, usmash=0.2))[ctx])
+            if way == "usmash":
                 return smash(0.0, 1.0)
-            if dx < 12 and self.rng.random() < 0.5:
-                return press(A | ZR)
-            return press(X | ZR)  # the air rules take the aerial
+            return press(A | ZR) if way == "grab" else press(X | ZR)  # the air rules take the aerial
         if dx < 22 and -10 < dy < 18 and o.status in GRAB:
             # Spot dodge its grab, not twice in half a second (pros: it stales), then punish the miss.
             if self.o_t < 8 and self.dodge_t > 30:
@@ -506,16 +541,18 @@ class Agent:
             # Hamza found it not aggressive enough waiting 45 frames between pokes (31/10).
             if not self.wait and grounded:
                 self.wait = f["poke_wait"]
-                r = self.rng.random()
-                if o.damage > kill and abs(dy) < 8 and dx < 14 and r < 0.4:
-                    return smash(side, 0.0)
-                if dx < 12 and r > 0.8:
-                    return press(A | ZR)  # grab
-                if dx < 14 and r < 0.35:
-                    return press(A)  # jab
-                if dx < 14 and r < 0.6:
-                    return press(A, 0.0, -0.5)  # down tilt
-                return press(A, side * 0.5, 0.0)  # forward tilt, the longest
+                near, mid = dx < 12, dx < 14
+                killable = o.damage > kill and abs(dy) < 8 and mid
+                prior = {"ftilt": 0.2 if near else 0.4}  # forward tilt, the longest
+                if mid:
+                    prior.update(jab=0.05 if killable else 0.35, dtilt=0.2 if killable else 0.25)
+                if near:
+                    prior["grab"] = 0.2
+                if killable:
+                    prior["smash"] = 0.4
+                way = self.choose("poke", ("kill" if killable else "low") + ("-near" if near else "-mid"), prior)
+                return dict(smash=smash(side, 0.0), grab=press(A | ZR), jab=press(A), dtilt=press(A, 0.0, -0.5),
+                            ftilt=press(A, side * 0.5, 0.0))[way]
             return 0, 0.0, 0.0
         if abs(me.x) > EDGE - 12 and abs(o.x) < abs(me.x):
             return 0, -np.sign(me.x) * 0.6, 0.0  # away from our own ledge
@@ -528,20 +565,28 @@ class Agent:
             self.wait = f["approach_wait"]
             # Only a run makes A a dash attack: standing, v4's came out as tilts and smashes
             # 25 or more away.
-            if grounded and facing and me.status in RUNNING and self.rng.random() < f["dash"]:
+            running = grounded and facing and me.status in RUNNING
+            prior = dict(hop=1.0, run=0.1) if f["hop"] else dict(run=1.0)
+            if running:
+                prior = dict({k: v * (1 - f["dash"]) for k, v in prior.items()}, dash=f["dash"])
+            way = self.choose("approach", ("running" if running else "standing")
+                              + ("-shield" if o.status in SHIELD else ""), prior)
+            if way == "dash":
                 return press(A | ZR if o.status in SHIELD else A, float(side), 0.0)  # dash attack or dash grab
-            if f["hop"]:
+            if way == "hop":
                 return press(X, side * 0.6, 0.0)  # short hop in: the air rules take it
         return 0, float(side), 0.0  # run in, also between fireballs (it stood 19 % of the time)
 
     def pad(self, mask, lx, ly):
         return mask, int(lx * 32767), int(ly * 32767)
 
-    def act(self, fighters):
-        """Pad for the next frame: (bridge button mask, lx, ly) as npad values.
+    def act(self, fighters, frame=None):
+        """Pad for the next frame: (bridge button mask, lx, ly) as npad values; frame, the bridge
+        frame's index, goes with the choices made on it.
 
         Trained one on one: with more fighters, it faces the nearest one still in the match."""
         me = fighters[self.me]
+        self.frame, self.kind = frame, int(me.kind)
         others = [i for i in fighters if i != self.me]
         other = min([i for i in others if fighters[i].stock > 0] or others,
                     key=lambda i: (fighters[i].x - me.x) ** 2 + (fighters[i].y - me.y) ** 2)

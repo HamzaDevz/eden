@@ -18,10 +18,12 @@ With --figs the AIs play as on the Odin: their controllers (8, then 7...) go bac
 screen, the first one goes to the character select, where smash_record.py makes its player card
 its FIG card, puts its amiibo (ROOT\\k\\amiibo) and plays it with --pad 7, in the same conditions.
 Each AI has its own brain: the instances play the one smash_rl.py names in HOME\\ai, its champion
-and candidate (see models()), and restart when it names the next.
+and candidate (see models()), and restart when it names the next. On the instances listed by --duel
+its champion meets the other AIs instead of the CPU (smash_record.py --duel): those matches teach
+both their choices (smash_rl.learn_choices()) and stay out of the candidates' measure.
 
-  smash_farm.py --instances 0 1 2 [--cpu 0] [--champion 0] [--figs Ultimus,...] [--every 5400]
-                [--idle 900]
+  smash_farm.py --instances 0 1 2 [--cpu 0] [--champion 0] [--duel 2] [--figs Ultimus,...]
+                [--every 5400] [--idle 900]
 """
 import argparse
 import glob
@@ -341,12 +343,14 @@ class Instance:
             return
         candidate, champion = models(self.a.home, self.ai or "Ultimus")
         mode = (["--out", os.path.join(self.a.home, "rec")] if self.cpu else
-                ["--agent", champion if self.k in self.a.champion else candidate,
+                ["--agent", champion if self.k in self.a.champion + self.a.duel else candidate,
                  "--out", os.path.join(self.a.home, "play")])
         if self.ai:  # the Odin's way: its pads 5 to 8 connected at boot, the AI trained on the 8th
             figs = [self.ai] + [n for n in self.a.figs.split(",") if n != self.ai]
             mode += ["--players", "8", "--pad", str(FIG_PAD), "--figs", ",".join(figs),
                      "--amiibo", os.path.join(self.dir, "amiibo")]
+            if self.k in self.a.duel:
+                mode += ["--duel", ",".join(figs[1:])]
         cpu_level = os.path.join(self.a.home, f"cpu-level-{self.k}")
         if self.ai and os.path.exists(cpu_level):  # Smash's CPU past level 9, kept out of training
             mode += ["--cpu-level", open(cpu_level).read().strip(),
@@ -371,6 +375,8 @@ def main():
                     help="instances where CPU plays against CPU, into HOME\\rec")
     ap.add_argument("--champion", type=int, nargs="*", default=[0],
                     help="instances where Ultimus plays the champion instead of the candidate")
+    ap.add_argument("--duel", type=int, nargs="*", default=[2],
+                    help="with --figs, instances where the AI's champion meets the other AIs")
     ap.add_argument("--figs", default="Ultimus,Ganon,Link,Zelda,Mac,Bowser", help="the AIs play their FIG cards as on the Odin (Ultimus,...), "
                     "from ROOT\\k\\amiibo")
     ap.add_argument("--every", type=int, default=1800, help="restart after this many seconds")

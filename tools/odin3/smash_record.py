@@ -813,10 +813,10 @@ def main():
                     b.pad(pad, *join_steps.pop(0))
                     if not join_steps:
                         b.release(pad)
-                        now = smash_state.cards(f)
+                        cards = smash_state.cards(f)
                         if card is None:
-                            log(f"{len(now)} cards left")
-                        elif now.get(card, (None,))[0] == smash_state.FIG:
+                            log(f"{len(cards)} cards left")
+                        elif cards.get(card, (None,))[0] == smash_state.FIG:
                             log(f"card {card + 1} is {pad_figs[pad]}'s FIG card again")
                             last_ai[card] = pad_figs[pad]  # its amiibo goes back below
                             refig_fails = 0
@@ -825,7 +825,7 @@ def main():
                                 f"({REFIG_RIGHT[refig_at]} frames right)")
                             refig_at, refig_fails = (refig_at + 1) % len(REFIG_RIGHT), refig_fails + 1
                             if refig_fails >= len(REFIG_RIGHT):  # every path failed: until the cards change
-                                tried, refig_fails = now, 0
+                                tried, refig_fails = cards, 0
                         picking = None
                 elif kinds_until and f.index >= kinds_until and f.index < kinds_last and loading():
                     # The PC, uncapped, loads the stage in more frames than KINDS_FOR: FIG cards
@@ -906,9 +906,9 @@ def main():
                         figs_back, duel_back = [], []
                 elif count == 0 and f.index >= next_look:
                     next_look = f.index + LOOK_EVERY
-                    now, owners = smash_state.cards(f), card_owners(f)
+                    cards, owners = smash_state.cards(f), card_owners(f)
                     wanted = badges.wanted(b, int(info[3].split("=")[1], 16), f) if badges else {}
-                    faces = portraits.wanted(now) if portraits else {}
+                    faces = portraits.wanted(cards) if portraits else {}
                     if badges or faces:
                         # Only on the character select itself, a screenshot tells.
                         shot = smash_farm.grab(b) if wanted or faces else None
@@ -916,9 +916,9 @@ def main():
                         if badges:
                             badges.show(b, f, wanted if css else None)
                         if faces and css:
-                            portraits.take(b, now, faces)
+                            portraits.take(b, cards, faces)
                     seated, ai_figs, waiting = {}, {}, set()
-                    for i, (kind, chara) in now.items():
+                    for i, (kind, chara) in cards.items():
                         nick, pad = owners.get(i, ("", -1))
                         if kind == smash_state.FIG and nick in fig_pads and nick not in seated:
                             ai_figs[i] = seated[nick] = nick
@@ -933,7 +933,7 @@ def main():
                                    f"main+{smash_state.CARD_PADS + i * smash_state.CARD_PAD_SIZE:#x}")
                     for i in set(fig_cards) - set(ai_figs):
                         b.unpoke(f"pad{i}")
-                        if now.get(i, (None,))[0] != smash_state.HUMAN:  # no longer an AI's card
+                        if cards.get(i, (None,))[0] != smash_state.HUMAN:  # no longer an AI's card
                             b.poke(f"pad{i}", (-1).to_bytes(4, "little", signed=True),
                                    f"main+{smash_state.CARD_PADS + i * smash_state.CARD_PAD_SIZE:#x}")
                             b.unpoke(f"pad{i}")
@@ -966,27 +966,27 @@ def main():
                     # A player card on an AI's controller: never the AI's, back to its FIG card
                     # (not one a + that started no match made a player card for a while). One
                     # named otherwise, or nameless on a controller someone plays, is theirs.
-                    lost = [(i, p) for i, (kind, chara) in now.items()
+                    lost = [(i, p) for i, (kind, chara) in cards.items()
                             for nick, p in [owners.get(i, ("", -1))]
                             if kind == smash_state.HUMAN and p in pad_figs
                             and (nick == pad_figs[p] or not nick and not someones(p))
                             and not (kinds_until and i in converted)]
-                    last = max(now, default=None)
-                    empty_seen = empty_seen + 1 if a.auto and a.pad is not None and len(now) > 2 \
-                        and now[last] == (smash_state.HUMAN, 0) \
+                    last = max(cards, default=None)
+                    empty_seen = empty_seen + 1 if a.auto and a.pad is not None and len(cards) > 2 \
+                        and cards[last] == (smash_state.HUMAN, 0) \
                         and owners.get(last, ("", -1))[1] not in pad_figs else 0
                     if empty_seen >= DROP_AFTER:
                         log(f"card {last + 1} is a player card without a fighter: "
                             f"{pad_figs[a.pad]}'s hand removes it")
                         picking, join_steps, empty_seen = (None, a.pad), list(DROP), 0
-                    elif lost and now != tried:
+                    elif lost and cards != tried:
                         # Its presses anywhere but on the character select could open a menu.
                         shot = smash_farm.grab(b)
                         name, dist = smash_farm.screen(shot[0], refs) if shot else ("none", 0)
-                        if name in ("css", "ready") and (lost[0][0], len(now)) != (0, 2):
+                        if name in ("css", "ready") and (lost[0][0], len(cards)) != (0, 2):
                             log(f"card {lost[0][0] + 1} is a player card on {pad_figs[lost[0][1]]}'s "
                                 "controller, no path to its label: not an AI")
-                            tried = now
+                            tried = cards
                         elif name in ("css", "ready"):
                             log(f"card 1 is a player card on {pad_figs[lost[0][1]]}'s controller: "
                                 "back to its FIG card")

@@ -600,7 +600,9 @@ def main():
             if (count, ready, result) != flags:
                 flags = (count, ready, result)
                 log(f"fighters {count} ready_go {ready} result {result}")
-            fighting = count >= 2 and not result and f.watches.get("0pos") is not None
+            # Fighters sit at their card's slot: J2 against J4 leaves slot 0 empty (11/11).
+            fighting = count >= 2 and not result and any(
+                f.watches.get(f"{i}pos") is not None for i in range(a.players))
             # Eden can unplug the AIs' controllers (a pad joining as player 1, a launch from the
             # game list): they are plugged back in, else their fighters stand still.
             if fig_pads and f.index >= next_plug:
@@ -1105,7 +1107,12 @@ def main():
                 # With --pad, the first AI's: player 1's has no card there.
                 # Player 1's only after a few looks off the select: a screen not told apart as the
                 # select a moment would make it join there (3/11).
-                for i in ([a.pad, 0] if off_css > OFF_CSS_P1 else [a.pad]) if a.pad is not None else \
+                # Smash takes + only from a controller with a hand on the select: with only Mac's
+                # FIG card against the CPU, the first AI's + went unseen (11/11). + joins no one,
+                # so it goes to player 1's and every AI's.
+                for i in ([a.pad, 0] if off_css > OFF_CSS_P1 else
+                          [a.pad, 0, *(p for p in fig_pads.values() if p not in (a.pad, 0))]
+                          if pressed == BUTTON_PLUS else [a.pad]) if a.pad is not None else \
                         range(a.players if a.selfplay else 1):
                     b.pad(i, pressed)
                 press_until = f.index + PRESS_FRAMES

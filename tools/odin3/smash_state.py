@@ -202,6 +202,19 @@ def tag_name(bridge, main, record):
     return data[4:4 + count * 2].decode("utf-16-le", "replace") if 0 < count <= 10 else ""
 
 
+def tag_names(bridge, main):
+    """{record: name} of the name tags in the save data, empty before the game loads it."""
+    holder = bridge.read(main + SAVE, 8)
+    save = holder and int.from_bytes(holder, "little") and bridge.read(int.from_bytes(holder, "little"), 8)
+    out = {}
+    for record in range(64) if save else ():
+        data = bridge.read(int.from_bytes(save, "little") + TAGS + record * TAG_SIZE, 0x18)
+        count = int.from_bytes(data[:4], "little") if data else 0
+        if 0 < count <= 10:
+            out[record] = data[4:4 + count * 2].decode("utf-16-le", "replace")
+    return out
+
+
 def rename_tag(bridge, main, tag, new):
     """Names new the name tag tag, or tag followed by a number (an earlier call), in the save data:
     the records it renamed. main is the base of the main module ("info")."""

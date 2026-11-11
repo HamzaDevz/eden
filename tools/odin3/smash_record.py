@@ -68,6 +68,9 @@ BUTTON_A, BUTTON_B, BUTTON_PLUS = 0x1, 0x2, 0x400
 # PICK_AFTER on the results: it waits for a minute without match first.
 PICK_AFTER = 4
 NAVIGATE_AFTER = 40
+# With --pad and --auto, + presses off the select (Smash just opened) before the first AI's
+# controller takes the menus there: the select gives it card 1, which it makes its FIG card.
+OFF_SELECT_AFTER = 10
 DOOR = (slice(26, 32), slice(52, 58))  # Challenger's Approach's door on Games & More, 36x64
 
 
@@ -592,6 +595,26 @@ def main():
             b.poke(f"kind{pid}{i}", smash_state.CPU.to_bytes(4, "little"), f"main+{at + smash_state.CARD_KIND:#x}")
         b.poke(f"pad{i}", pad.to_bytes(4, "little", signed=True), f"main+{smash_state.CARD_PADS + i * smash_state.CARD_PAD_SIZE:#x}")
 
+    # A card an AI plays as a player card shows that card's name tag, card 1's being the last
+    # one player 1 had (Bare's on 11/11, in his Smash stats too): the AI's own tag instead, if the
+    # save has one (Ultimus only on 11/11), else none. Put back when the cards are let go.
+    save_tags, tag_was = {}, {}
+
+    def tag_as(i, nick, f):
+        if not save_tags:
+            main = b.ask("info", "info").split()[3].split("=")[1]
+            save_tags.update({n: r for r, n in smash_state.tag_names(b, int(main, 16)).items()}
+                             if main != "-" else {})
+        tag_was.setdefault(i, smash_state.card_tags(f).get(i, -1))
+        b.poke(f"tag{i}", save_tags.get(nick, -1).to_bytes(4, "little", signed=True),
+               f"main+{smash_state.CARD_PADS + i * smash_state.CARD_PAD_SIZE + smash_state.CARD_TAG:#x}")
+
+    def tag_back(i):
+        if i in tag_was:
+            b.poke(f"tag{i}", tag_was.pop(i).to_bytes(4, "little", signed=True),
+                   f"main+{smash_state.CARD_PADS + i * smash_state.CARD_PAD_SIZE + smash_state.CARD_TAG:#x}")
+            b.unpoke(f"tag{i}")
+
     def ready_banner():
         """Whether the character select shows the banner an A starts the match from."""
         nonlocal a_looked
@@ -871,6 +894,7 @@ def main():
                             b.poke(f"kind{i}", bytes(4), f"main+{smash_state.CARDS + i * smash_state.CARD_SIZE + smash_state.CARD_KIND:#x}")
                             b.poke(f"kindcopy{i}", bytes(4), f"main+{smash_state.CARD_PADS + i * smash_state.CARD_PAD_SIZE + smash_state.CARD_COPY + smash_state.CARD_KIND:#x}")
                             converted[i] = fig_cards[i] = last_ai[i] = nick
+                            tag_as(i, nick, f)
                     for i, (kind, _) in smash_state.cards(f).items() if a.cpu_level else ():
                         if kind == smash_state.CPU:
                             for pid, at in ((f"level{i}", smash_state.CARDS + i * smash_state.CARD_SIZE),
@@ -889,6 +913,7 @@ def main():
                             b.poke(f"pad{i}", fig_pads[ai].to_bytes(4, "little", signed=True),
                                    f"main+{smash_state.CARD_PADS + i * smash_state.CARD_PAD_SIZE:#x}")
                             duel[i] = ai, owners.get(i, ("", -1))[1]
+                            tag_as(i, ai, f)
                     if converted:
                         kinds_until, kinds_last = f.index + KINDS_FOR, f.index + BACK_FOR
                         log("+: " + ", ".join(f"card {i + 1} is {n}'s" for i, n in [*converted.items(), *((i, d[0]) for i, d in duel.items())]))
@@ -900,6 +925,7 @@ def main():
                         for i in figs_back + [i for i, _ in duel_back]:
                             b.unpoke(f"kind{i}")
                             b.unpoke(f"kindcopy{i}")
+                            tag_back(i)
                         for i, _ in duel_back:
                             b.unpoke(f"pad{i}")
                         log("FIG cards let go on the character select")
@@ -1097,6 +1123,18 @@ def main():
                             b.sync(a.sync)
                         starts, picker, relevel = 0, 0, False  # its stick may still show until the match
                         continue
+                    if a.pad is not None and starts >= OFF_SELECT_AFTER and starts % OFF_SELECT_AFTER == 0 \
+                            and not result:
+                        shot = smash_farm.grab(b)
+                        name = smash_farm.screen(shot[0], refs)[0] if shot else "dark"
+                        if name not in ("css", "ready", "dark"):
+                            log(f"screen {name}: {pad_figs[a.pad]}'s controller goes to the character select")
+                            log(f"screen {smash_farm.to_select(b, refs, a.pad, pad_figs[a.pad])}")
+                            b.ask("stream 1", "ok")  # play stops the stream when done
+                            if a.sync:
+                                b.sync(a.sync)
+                            starts = 0
+                            continue
                     if a.pad is None and starts >= PICK_AFTER and slot not in (0, None):
                         log(f"the match does not start, player {slot + 1} picks Mario")
                         steps, picker = list(PICK), slot

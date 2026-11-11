@@ -114,6 +114,29 @@ def grab(b):
     return g, (w, h, bgra)
 
 
+def to_select(b, refs, pad=0, who="instance"):
+    """Presses pad's way through the menus by what is on screen: the first screen it does not
+    press on (the character select, "css" or "ready"), None if none came in 60 looks."""
+    lost = 0
+    for _ in range(60):
+        shot = grab(b)
+        if shot is None:
+            time.sleep(2)
+            continue
+        name, d = screen(shot[0], refs)
+        log(f"{who}: {name} {d:.1f}")
+        if name == "dark":
+            time.sleep(2)
+        elif name in ("unknown", "challengers"):  # a challenger's select at boot: declined
+            play(b, LOST[lost % len(LOST)], pad=pad)
+            lost += 1
+        elif name in ROUTE:
+            play(b, ROUTE[name], pad=pad)
+        else:
+            return name
+    return None
+
+
 def load_refs():
     refs = np.load(SCREENS)
     return {n: refs[n].astype(np.float32) for n in refs.files}
@@ -222,24 +245,8 @@ class Instance:
 
     def navigate(self, b):
         """Presses its way to the character select by what is on screen; True once ready."""
-        lost = 0
-        for _ in range(60):
-            shot = grab(b)
-            if shot is None:
-                time.sleep(2)
-                continue
-            name, d = screen(shot[0], self.refs)
-            log(f"instance {self.k}: {name} {d:.1f}")
-            if name == "dark":
-                time.sleep(2)
-            elif name in ("unknown", "challengers"):  # a challenger's select at boot: declined
-                play(b, LOST[lost % len(LOST)], pad=self.pad)
-                lost += 1
-            elif name in ROUTE:
-                play(b, ROUTE[name], pad=self.pad)
-            else:
-                break
-        else:
+        name = to_select(b, self.refs, self.pad, f"instance {self.k}")
+        if name is None:
             return False
         if name == "css":
             if self.cpu:  # the select forgets that player 1 was a CPU: the player button first

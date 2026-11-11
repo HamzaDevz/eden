@@ -90,10 +90,12 @@ object InputHandler {
             else -> return false
         }
 
-        var controllerData = androidControllers[event.device.controllerNumber]
+        // A pad that left while its events were on their way has no device any more
+        val device = event.device ?: return false
+        var controllerData = androidControllers[device.controllerNumber]
         if (controllerData == null) {
             updateControllerData()
-            controllerData = androidControllers[event.device.controllerNumber] ?: return false
+            controllerData = androidControllers[device.controllerNumber] ?: return false
         }
 
         if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) {
@@ -138,12 +140,14 @@ object InputHandler {
     }
 
     /**
-     * Frees the players whose pad went away, and hands player 1 back to the handheld's own pad
-     * when its pad went away too or when the handheld leaves its dock.
+     * Hands player 1 back to the handheld's own pad when its pad went away or when the handheld
+     * leaves its dock. With releaseGone, as a game starts, also frees the players whose pad went
+     * away; during the game they stay connected for their pad to come back to, as the game
+     * would otherwise drop them mid-match.
      */
-    fun refreshPlayers(undocked: Boolean = false) {
+    fun refreshPlayers(undocked: Boolean = false, releaseGone: Boolean = false) {
         // Players set up without a pad, such as those driven by TAS, are left connected
-        for (playerIndex in 1 until PLAYER_COUNT) {
+        for (playerIndex in (if (releaseGone) 1 until PLAYER_COUNT else IntRange.EMPTY)) {
             val params = NativeInput.getButtonParam(playerIndex, NativeButton.A)
             if (params.get("engine", "") == "android" && params.get("guid", "").isNotEmpty() &&
                 NativeInput.getIsConnected(playerIndex) && holderOf(playerIndex) == null
@@ -228,13 +232,14 @@ object InputHandler {
     }
 
     fun dispatchGenericMotionEvent(event: MotionEvent): Boolean {
-        val controllerData =
-            androidControllers[event.device.controllerNumber] ?: return false
-        event.device.motionRanges.forEach {
+        // A pad that left mid-move: its last events come without a device (crash of 11/11)
+        val device = event.device ?: return false
+        val controllerData = androidControllers[device.controllerNumber] ?: return false
+        device.motionRanges.forEach {
             NativeInput.onGamePadAxisEvent(
                 controllerData.getGUID(),
                 controllerData.getPort(),
-                getAxisId(event.device, it.axis),
+                getAxisId(device, it.axis),
                 event.getAxisValue(it.axis)
             )
         }
@@ -251,20 +256,26 @@ object InputHandler {
         else -> axis
     }
 
+    // Each pad's port among those of its GUID, by descriptor, kept while it stays connected
+    private val ports = mutableMapOf<String, Pair<String, Int>>()
+
     fun getDevices(): Map<Int, YuzuPhysicalDevice> {
         val gameControllerDeviceIds = mutableMapOf<Int, YuzuPhysicalDevice>()
-        val deviceIds = InputDevice.getDeviceIds()
-        // Ports count per GUID, so a binding survives other controllers coming and going
-        val nextPorts = mutableMapOf<String, Int>()
+        val devices: List<InputDevice> = InputDevice.getDeviceIds().toList()
+            .mapNotNull { InputDevice.getDevice(it) }.filter { isPhysicalGameController(it) }
+        // Ports count per GUID, so a binding survives other controllers coming and going: a pad
+        // keeps its port while another of its kind leaves, and one that comes back takes the
+        // lowest free one, which gives it its player back when it was the one to leave.
+        ports.keys.retainAll(devices.map { it.descriptor }.toSet())
         val inputSettings = NativeConfig.getInputSettings(true)
-        deviceIds.forEach { deviceId ->
-            InputDevice.getDevice(deviceId)?.apply {
-                if (isPhysicalGameController(this) &&
-                    !gameControllerDeviceIds.contains(controllerNumber)
-                ) {
+        devices.forEach { device ->
+            device.apply {
+                if (!gameControllerDeviceIds.contains(controllerNumber)) {
                     val guid = getGUID()
-                    val port = nextPorts.getOrDefault(guid, 0)
-                    nextPorts[guid] = port + 1
+                    val port = ports[descriptor]?.takeIf { it.first == guid }?.second
+                        ?: ports.values.filter { it.first == guid }.map { it.second }.toSet()
+                            .let { used -> generateSequence(0) { it + 1 }.first { it !in used } }
+                    ports[descriptor] = guid to port
                     gameControllerDeviceIds[controllerNumber] = YuzuPhysicalDevice(
                         this,
                         port,

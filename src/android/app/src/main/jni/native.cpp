@@ -409,10 +409,14 @@ void EmulationSession::UnPauseEmulation() {
 }
 
 void EmulationSession::HaltEmulation() {
-    std::scoped_lock lock(m_mutex);
     m_is_running = false;
-    // A stop during the boot's shader build must not wait for the whole cache to compile.
-    m_load_stop.request_stop();
+    // Never waits for the mutex: a stop under way holds it while the game shuts down, and the
+    // main thread asks again meanwhile on a ROM swap (ANR of 11/11).
+    std::unique_lock lock(m_mutex, std::try_to_lock);
+    if (lock.owns_lock()) {
+        // A stop during the boot's shader build must not wait for the whole cache to compile.
+        m_load_stop.request_stop();
+    }
     m_cv.notify_one();
 }
 

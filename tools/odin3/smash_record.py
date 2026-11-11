@@ -114,6 +114,7 @@ WAIT_PICK = 3  # looks a FIG card nobody knows waits for its figurine before it 
 AMIIBO = "/storage/emulated/0/Android/data/com.miHoYo.Yuanshen.relWithDebInfo/files/amiibo"
 PORTRAITS = "/sdcard/smash-ai/portraits"  # ultimus.sh copies them into AMIIBO/images for Eden
 KINDS_FOR = 600  # frames the FIG cards stay player cards after a + that started no match
+HELD_FOR = 36000  # frames a controller someone pressed on stays theirs
 BACK_FOR = 3600  # frames the AIs' cards stay FIG cards after a match without the character select seen
 
 
@@ -496,6 +497,25 @@ def main():
         return agents[i]
 
     b = Bridge(a.host, a.port)
+    # The frame of the last input sent to each controller. People can play on the AIs' ones (11/11:
+    # five took players 1-5, Bowser's to Zelda's): input this sent none to lately is someone's.
+    sent, now = {}, [0]
+    def track(send):
+        def to(player, *args):
+            sent[player] = now[0]
+            return send(player, *args)
+        return to
+    b.pad, b.release = track(b.pad), track(b.release)
+
+    def ai_input(k):
+        """Whether input on controller k is the AIs': one of theirs this sent some to lately."""
+        return k in pad_figs and now[0] - sent.get(k, -PRESS_EVERY) < PRESS_EVERY
+
+    people = {}  # the frame someone last pressed on each controller
+
+    def someones(k):
+        """Whether someone played on controller k in the last 10 minutes."""
+        return now[0] - people.get(k, -HELD_FOR) < HELD_FOR
     b.ask("stream 0", "ok")  # drops the frames sent since the connection
     info = b.ask("info", "info").split()
     if info[1] != SMASH:
@@ -595,6 +615,8 @@ def main():
     try:
         for line in b.frames(raw=True):
             f = Frame(line)
+            now[0] = f.index
+            people.update((k, f.index) for k, p in f.pads.items() if p[0] and not ai_input(k))
             fm = f.watches.get("fm")
             count, ready, result = (fm[0], fm[0x32], fm[0x49]) if fm else (0, 0, 0)
             if (count, ready, result) != flags:
@@ -776,8 +798,8 @@ def main():
             # The results wait for an A from every player, the AIs' too (their player cards still
             # hold their controllers there).
             if fig_pads and result and count >= 2 and f.index >= next_ok:
-                for _, p in smash_state.card_owners(f).values():
-                    if p in pad_figs:
+                for nick, p in card_owners(f).values():
+                    if p in pad_figs and nick == pad_figs[p]:  # not someone's results on it
                         b.pad(p, BUTTON_A)
                 ok_until, next_ok = f.index + PRESS_FRAMES, f.index + PRESS_EVERY
             elif ok_until and f.index >= ok_until:
@@ -822,8 +844,8 @@ def main():
                         set_cpu(i, pad0)
                 elif count == 0 and not kinds_until and not figs_back and not duel_back and f.index >= a_looked and any(
                         p[0] & (BUTTON_PLUS | BUTTON_A) for k, p in f.pads.items()
-                        if k not in pad_figs or a.auto) and (any(
-                        p[0] & BUTTON_PLUS for k, p in f.pads.items() if k not in pad_figs or a.auto)
+                        if not ai_input(k) or a.auto) and (any(
+                        p[0] & BUTTON_PLUS for k, p in f.pads.items() if not ai_input(k) or a.auto)
                         or ready_banner()):  # an A picking a fighter starts nothing
                     # The match takes the kind and controller from both tables when it starts:
                     # player cards on the AIs' controllers, built as players, Smash's FIG AI out.
@@ -833,9 +855,17 @@ def main():
                     if badges:
                         badges.show(b, f)
                     owners, converted = card_owners(f), {}
+                    # Someone's card on an AI's controller: that AI's FIG card stays Smash's, else
+                    # the AI would play both fighters and that person both too.
+                    theirs = {p for i, (kind, _) in smash_state.cards(f).items()
+                              for nick, p in [owners.get(i, ("", -1))]
+                              if kind == smash_state.HUMAN and p in pad_figs and nick != pad_figs[p]}
                     for i, (kind, _) in smash_state.cards(f).items():
                         nick = owners.get(i, ("",))[0]
-                        if kind == smash_state.FIG and nick in fig_pads and nick not in converted.values():
+                        if kind == smash_state.FIG and nick in fig_pads and fig_pads[nick] in theirs:
+                            log(f"{nick}'s controller {fig_pads[nick] + 1} is someone's: Smash plays "
+                                f"card {i + 1}")
+                        elif kind == smash_state.FIG and nick in fig_pads and nick not in converted.values():
                             b.poke(f"pad{i}", fig_pads[nick].to_bytes(4, "little", signed=True),
                                    f"main+{smash_state.CARD_PADS + i * smash_state.CARD_PAD_SIZE:#x}")
                             b.poke(f"kind{i}", bytes(4), f"main+{smash_state.CARDS + i * smash_state.CARD_SIZE + smash_state.CARD_KIND:#x}")
@@ -934,10 +964,12 @@ def main():
                         placed, placed_until = back[0][1], f.index + PLACED_FOR
                         log(f"{placed}'s amiibo back on the reader for card {back[0][0] + 1}")
                     # A player card on an AI's controller: never the AI's, back to its FIG card
-                    # (not one a + that started no match made a player card for a while).
+                    # (not one a + that started no match made a player card for a while). One
+                    # named otherwise, or nameless on a controller someone plays, is theirs.
                     lost = [(i, p) for i, (kind, chara) in now.items()
-                            for p in [owners.get(i, ("", -1))[1]]
+                            for nick, p in [owners.get(i, ("", -1))]
                             if kind == smash_state.HUMAN and p in pad_figs
+                            and (nick == pad_figs[p] or not nick and not someones(p))
                             and not (kinds_until and i in converted)]
                     last = max(now, default=None)
                     empty_seen = empty_seen + 1 if a.auto and a.pad is not None and len(now) > 2 \
@@ -971,7 +1003,7 @@ def main():
             ours = pressed if f.index < next_press + PRESS_EVERY else 0
             touched = {i: hex(p[0]) for i, p in f.pads.items()
                        if p[0] & ~ours and i not in active and i != picker
-                       and i not in fig_pads.values()
+                       and not ai_input(i)
                        and not (i in quiet and f.index < quiet_until)}
             if touched:
                 # The Odin is theirs again: no more menus nor matches started, the AIs still play
@@ -1124,8 +1156,11 @@ def main():
             out.close()
             os.rename(path + ".part", path)
             log(f"partial match kept: {path}")
-        for i in {0, *agents, *fig_pads.values()}:
-            b.release(i)
+        try:  # Eden may be gone
+            for i in {0, *agents, *fig_pads.values()}:
+                b.release(i)
+        except OSError:
+            pass
         if a.release_lock:
             subprocess.run([ADB, "shell", "rm", "-f", LOCK])
             log("console lock released")

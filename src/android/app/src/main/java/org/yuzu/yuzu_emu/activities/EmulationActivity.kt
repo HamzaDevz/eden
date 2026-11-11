@@ -66,6 +66,7 @@ import org.yuzu.yuzu_emu.utils.MemoryUtil
 import org.yuzu.yuzu_emu.utils.NativeConfig
 import org.yuzu.yuzu_emu.utils.NfcReader
 import org.yuzu.yuzu_emu.utils.ParamPackage
+import org.yuzu.yuzu_emu.utils.TermuxHook
 import org.yuzu.yuzu_emu.utils.ThemeHelper
 import java.text.NumberFormat
 import kotlin.math.roundToInt
@@ -270,6 +271,9 @@ class EmulationActivity : AppCompatActivity(), SensorEventListener, InputManager
         startMotionSensorListener()
         InputHandler.updateControllerData()
         notifyPhysicalControllerState()
+        if (hasEmulationSession) {
+            TermuxHook.start(this)
+        }
 
         buildPictureInPictureParams()
     }
@@ -277,6 +281,7 @@ class EmulationActivity : AppCompatActivity(), SensorEventListener, InputManager
     override fun onPause() {
         nfcReader.stopScanning()
         stopMotionSensorListener()
+        TermuxHook.stop()
         super.onPause()
     }
 
@@ -286,6 +291,7 @@ class EmulationActivity : AppCompatActivity(), SensorEventListener, InputManager
         inputManager.unregisterInputDeviceListener(this)
         displayManager.unregisterDisplayListener(displayListener)
         GameCubeAdapter.stop()
+        TermuxHook.stop()
         stopForegroundService(this)
         NativeLibrary.playTimeManagerStop()
     }
@@ -859,8 +865,9 @@ class EmulationActivity : AppCompatActivity(), SensorEventListener, InputManager
         emulationViewModel.setIsEmulationStopping(false)
         emulationViewModel.setEmulationStopped(false)
         NativeLibrary.playTimeManagerStart()
-        InputHandler.refreshPlayers()
+        InputHandler.refreshPlayers(releaseGone = true)
         GameCubeAdapter.start(this)
+        TermuxHook.start(this)
 
     }
 
@@ -871,6 +878,7 @@ class EmulationActivity : AppCompatActivity(), SensorEventListener, InputManager
         }
         hasEmulationSession = false
         processHasEmulationSession = false
+        TermuxHook.stop()
         if (isWaitingForRomSwapStop) {
             romSwapNativeStopped = true
             Log.info("[EmulationActivity] ROM swap native stop acknowledged")

@@ -19,5 +19,10 @@ while true; do
       --points ~/smash-ai/points.json --badges ~/smash-ai/badges-points.json \
       $([ -e ~/smash-ai/train ] && echo --auto) >> ~/smash-ai/ultimus.log 2>&1
   fi
+  # The Odin's storage is nearly full: matches of several (nothing trains on them) keep the last
+  # 50, those the Mac takes to the PC (ultimus.sh) the last 100 while it does not.
+  for d in party:50 play:100 rec:100; do
+    ls -t ~/smash-ai/${d%:*}/*.txt.gz 2>/dev/null | tail -n +$((${d#*:} + 1)) | xargs rm -f
+  done
   sleep 30
 done

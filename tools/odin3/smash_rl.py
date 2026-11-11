@@ -196,8 +196,15 @@ def results(folder, ais=()):
     except (OSError, ValueError):
         known = {}
     out, fresh = [], False
-    for path in smash_dataset.recordings(folder):
+    paths = smash_dataset.recordings(folder)
+    gone = set(known) - {"win"} - {os.path.basename(p) for p in paths}  # by prune(): results kept
+    for path in sorted(paths + [os.path.join(os.path.expanduser(folder), n) for n in gone],
+                       key=os.path.basename):
         name = os.path.basename(path)
+        if name in gone:
+            if known[name] and len(known[name]) >= 8:
+                out.append(Match(path, *known[name]))
+            continue
         try:
             r = known[name] if name in known else result(path)
         except (OSError, EOFError, ValueError, zlib.error):  # cut short, as by a full disk
@@ -215,7 +222,7 @@ def results(folder, ais=()):
             out.append(Match(path, *r))
     need = {m.path for ai in ais for m in sum(level_games(out, ai), []) if m.stats is None}
     for i, m in enumerate(out):
-        if m.path in need:
+        if m.path in need and os.path.exists(m.path):
             d = smash_dataset.load(m.path)
             out[i] = m._replace(stats=match_stats(d, m.me, d["valid"].all(1).nonzero()[0]))
             if os.path.basename(m.path) in known:
@@ -309,6 +316,56 @@ def learn_choices(folder):
             with open(path + ".tmp", "w") as f:
                 f.write(text)
             os.replace(path + ".tmp", path)  # the recorders read it again between matches
+
+
+# What the AIs' matches may keep on disk (11/11: 46 000 matches and their caches, 100 GB, had
+# filled the PC's C:). Their results and choices stay in results.json and choices.json.
+PLAY_CAP = 5 * 2**30
+
+
+def prune(folder, res, keep):
+    """Deletes the matches results() and learn_choices() have read but each AI's last keep (the
+    ones train() and the loop's measures read again), fewer while they weigh over PLAY_CAP."""
+    folder = os.path.expanduser(folder)
+    read = set()
+    for index in ("results.json", "choices.json"):
+        try:
+            with open(os.path.join(folder, index)) as f:
+                read = set(json.load(f)) & read if read else set(json.load(f))
+        except (OSError, ValueError):
+            return
+    files = {os.path.basename(p): p for p in smash_dataset.recordings(folder)}
+    caches = lambda p: (p, p.replace(".txt.gz", ".npz"))
+    size = {n: sum(os.path.getsize(q) for q in caches(p) if os.path.exists(q)) for n, p in files.items()}
+    hour = time.time() - 3600
+    held = {n for n, p in files.items() if n not in read or os.path.getmtime(p) > hour}
+    by_ai = collections.defaultdict(list)
+    for m in res:
+        if os.path.basename(m.path) in files:
+            by_ai[m.name].append(os.path.basename(m.path))
+    while True:
+        kept = held | {n for names in by_ai.values() for n in names[-keep:]} if keep else held
+        if not keep or sum(size[n] for n in kept) <= PLAY_CAP:
+            break
+        keep = keep * 3 // 4
+    drop = set(files) - kept
+    for n in drop:
+        for q in caches(files[n]):
+            try:
+                os.remove(q)
+            except OSError:
+                pass
+    # Caches of matches gone, and matches a recorder killed mid-way left unfinished.
+    for q in glob.glob(os.path.join(folder, "*.npz")) + glob.glob(os.path.join(folder, "*.part")):
+        try:
+            if os.path.getmtime(q) < (hour - 86400 if q.endswith(".part") else hour) and (
+                    q.endswith(".part") or os.path.basename(q)[:-4] + ".txt.gz" not in files):
+                os.remove(q)
+        except OSError:
+            pass
+    if drop:
+        log(f"{len(drop)} matches read deleted ({sum(size[n] for n in drop) / 2**30:.1f} GB), "
+            f"{len(kept)} kept ({sum(size[n] for n in kept) / 2**30:.1f} GB, each AI's last {keep})")
 
 
 def current_level():
@@ -405,7 +462,8 @@ def train(a):
     rec = [p for p in smash_dataset.recordings(a.rec) if smash_bc.sequences([p])]
     # The AI's recent matches at the current level only: hundreds of old falls at level 9
     # would mostly teach it to fall again.
-    play = [m for m in results(a.play) if m.level == current_level() and m.name == a.ai][-a.recent:]
+    play = [m for m in results(a.play) if m.level == current_level() and m.name == a.ai
+            and os.path.exists(m.path)][-a.recent:]
     # Ultimus' side only: the weak CPU's moves are no example.
     rec_seqs = smash_bc.sequences(rec, returns)
     play_seqs = smash_bc.sequences([m.path for m in play], returns, {m.path: m.me for m in play})
@@ -512,6 +570,7 @@ def loop(a):
             # Models are measured on the PC only: the Odin's matches train them but play by other rules.
             res = results(a.play, ais)
             learn_choices(a.play)
+            prune(a.play, res, max(a.recent, a.most + a.reference))
             show_levels(res, ais)
             res = [m for m in res if m.level == level and m.measured and m.name == a.ai]
             best, current = version(champion), version(a.out)
@@ -527,7 +586,7 @@ def loop(a):
             mine = played[:len(played) // a.trial * a.trial]
             for m in mine + theirs:
                 if m.path not in falls:
-                    falls[m.path] = self_destructs(m.path, m.me)
+                    falls[m.path] = self_destructs(m.path, m.me) if os.path.exists(m.path) else 0
             # The true level decides (3/11): wins, spacing and speed.
             scores = lambda ms: np.array([performance(m) - FALL * falls[m.path] for m in ms])
             score = lambda ms: scores(ms).mean()

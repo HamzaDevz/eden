@@ -283,6 +283,12 @@ class Instance:
     def launch(self):
         self.kill()
         shutil.rmtree(os.path.join(self.dir, ORPHAN), ignore_errors=True)
+        # A kill mid-write leaves the driver pipeline cache at one 4 KiB page, and Eden then
+        # aborts at every boot (instance 2 from 11/11 05:36 to 12/11 04:12): set it aside.
+        cache = os.path.join(self.dir, r"user\cache\shader\01006a800016e000\vulkan_pipelines.bin")
+        if os.path.exists(cache) and os.path.getsize(cache) <= 4096:
+            os.replace(cache, cache + ".bad4k")
+            log(f"instance {self.k}: truncated pipeline cache set aside")
         subprocess.Popen([os.path.join(self.dir, "eden.exe"), "-g", GAME], cwd=self.dir,
                          creationflags=DETACHED)
         self.started = time.time()

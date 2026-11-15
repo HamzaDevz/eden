@@ -240,7 +240,12 @@ class Instance:
         """Time of the last match this instance's recorder saved."""
         out = os.path.join(self.a.home, "rec" if self.cpu else "play")
         name = f"*-{self.port}.txt.gz"  # the Odin's, synced here, have no port
-        times = [os.path.getmtime(p) for p in glob.glob(os.path.join(out, name))]
+        times = []
+        for p in glob.glob(os.path.join(out, name)):
+            try:
+                times.append(os.path.getmtime(p))
+            except FileNotFoundError:  # pruned by smash_rl.py meanwhile (farm down 14/11 05:44)
+                pass
         return max(times, default=0)
 
     def navigate(self, b):

@@ -40,21 +40,28 @@ bool IsHandheldOnly() {
 
 // The Android pad a player plays with, from any of its inputs: a pad whose keys Android does not
 // report gets only its sticks and d-pad mapped, so it has no A to tell it by
-Common::ParamPackage AndroidPadOf(const Settings::PlayerInput& player) {
+template <typename ButtonParam, typename StickParam>
+Common::ParamPackage AndroidPadOf(ButtonParam&& button, StickParam&& stick) {
     const auto is_pad = [](const Common::ParamPackage& params) {
         return params.Get("engine", "") == "android" && !params.Get("guid", "").empty();
     };
-    for (const auto& button : player.buttons) {
-        if (const Common::ParamPackage params{button}; is_pad(params)) {
+    for (std::size_t index = 0; index < Settings::NativeButton::NumButtons; ++index) {
+        if (auto params = button(index); is_pad(params)) {
             return params;
         }
     }
-    for (const auto& analog : player.analogs) {
-        if (const Common::ParamPackage params{analog}; is_pad(params)) {
+    for (std::size_t index = 0; index < Settings::NativeAnalog::NumAnalogs; ++index) {
+        if (auto params = stick(index); is_pad(params)) {
             return params;
         }
     }
     return {};
+}
+
+Common::ParamPackage AndroidPadOf(const Settings::PlayerInput& player) {
+    return AndroidPadOf(
+        [&](std::size_t index) { return Common::ParamPackage{player.buttons[index]}; },
+        [&](std::size_t index) { return Common::ParamPackage{player.analogs[index]}; });
 }
 
 std::filesystem::path GetNameWithoutExtension(std::filesystem::path filename) {
@@ -498,9 +505,13 @@ void Java_org_yuzu_yuzu_1emu_features_input_NativeInput_assignPlayer(
 jstring Java_org_yuzu_yuzu_1emu_features_input_NativeInput_getPlayerPadImpl(JNIEnv* env,
                                                                             jobject j_obj,
                                                                             jint j_player_index) {
-    const auto& player =
-        Settings::values.players.GetValue()[static_cast<size_t>(j_player_index)];
-    return Common::Android::ToJString(env, AndroidPadOf(player).Serialize());
+    const auto* controller =
+        EmulationSession::GetInstance().System().HIDCore().GetEmulatedControllerByIndex(
+            static_cast<std::size_t>(j_player_index));
+    const auto pad =
+        AndroidPadOf([&](std::size_t index) { return controller->GetButtonParam(index); },
+                     [&](std::size_t index) { return controller->GetStickParam(index); });
+    return Common::Android::ToJString(env, pad.Serialize());
 }
 
 void Java_org_yuzu_yuzu_1emu_features_input_NativeInput_resetControllerState(JNIEnv* env,

@@ -500,6 +500,9 @@ def main():
         return agents[i]
 
     b = Bridge(a.host, a.port)
+    # No frame comes while Eden is paused or in the background (19/11: 484 crashes after 10 s of
+    # it, the match under way lost with its points): wait for it, Eden closes the bridge as it goes
+    b.sock.settimeout(None)
     # The frame of the last input sent to each controller. People can play on the AIs' ones (11/11:
     # five took players 1-5, Bowser's to Zelda's): input this sent none to lately is someone's.
     sent, now = {}, [0]

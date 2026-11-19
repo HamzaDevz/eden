@@ -148,8 +148,7 @@ object InputHandler {
     fun refreshPlayers(undocked: Boolean = false, releaseGone: Boolean = false) {
         // Players set up without a pad, such as those driven by TAS, are left connected
         for (playerIndex in (if (releaseGone) 1 until PLAYER_COUNT else IntRange.EMPTY)) {
-            val params = NativeInput.getButtonParam(playerIndex, NativeButton.A)
-            if (params.get("engine", "") == "android" && params.get("guid", "").isNotEmpty() &&
+            if (NativeInput.getPlayerPad(playerIndex).get("guid", "").isNotEmpty() &&
                 NativeInput.getIsConnected(playerIndex) && holderOf(playerIndex) == null
             ) {
                 NativeInput.releasePlayer(playerIndex)
@@ -176,13 +175,13 @@ object InputHandler {
         if (!NativeInput.getIsConnected(playerIndex)) {
             return null
         }
-        val params = NativeInput.getButtonParam(playerIndex, NativeButton.A)
+        val params = NativeInput.getPlayerPad(playerIndex)
         return (androidControllers.values + extraControllers).firstOrNull { isDevice(params, it) }
     }
 
     private fun isPlaying(device: YuzuInputDevice, playerIndex: Int): Boolean =
         NativeInput.getIsConnected(playerIndex) &&
-            isDevice(NativeInput.getButtonParam(playerIndex, NativeButton.A), device)
+            isDevice(NativeInput.getPlayerPad(playerIndex), device)
 
     private fun isDevice(params: ParamPackage, device: YuzuInputDevice): Boolean =
         params.get("engine", "") == "android" &&
@@ -288,7 +287,14 @@ object InputHandler {
     }
 
     fun updateControllerData() {
+        val previous = androidControllers.values
         androidControllers = getDevices()
+        // A pad that went away leaves nothing held for the player it leaves connected
+        previous.filter { gone ->
+            androidControllers.values.none {
+                it.getGUID() == gone.getGUID() && it.getPort() == gone.getPort()
+            }
+        }.forEach { NativeInput.resetControllerState(it.getGUID(), it.getPort()) }
         androidControllers.forEach {
             NativeInput.registerController(it.value)
         }

@@ -47,6 +47,13 @@ public:
     void SetAxisPosition(std::string guid, size_t port, int axis_id, float value);
 
     /**
+     * Releases everything a controller that went away held, as its player may stay connected.
+     * @param guid 32 character hexadecimal string consisting of the controller's PID+VID.
+     * @param port Port determined by controller connection order.
+     */
+    void ResetControllerState(std::string guid, size_t port);
+
+    /**
      * Sets the status of the motion sensor on a specific controller
      * @param guid 32 character hexadecimal string consisting of the controller's PID+VID.
      * @param port Port determined by controller connection order.

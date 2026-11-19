@@ -38,6 +38,25 @@ bool IsHandheldOnly() {
     return !Settings::IsDockedMode();
 }
 
+// The Android pad a player plays with, from any of its inputs: a pad whose keys Android does not
+// report gets only its sticks and d-pad mapped, so it has no A to tell it by
+Common::ParamPackage AndroidPadOf(const Settings::PlayerInput& player) {
+    const auto is_pad = [](const Common::ParamPackage& params) {
+        return params.Get("engine", "") == "android" && !params.Get("guid", "").empty();
+    };
+    for (const auto& button : player.buttons) {
+        if (const Common::ParamPackage params{button}; is_pad(params)) {
+            return params;
+        }
+    }
+    for (const auto& analog : player.analogs) {
+        if (const Common::ParamPackage params{analog}; is_pad(params)) {
+            return params;
+        }
+    }
+    return {};
+}
+
 std::filesystem::path GetNameWithoutExtension(std::filesystem::path filename) {
     return filename.replace_extension();
 }
@@ -467,14 +486,29 @@ void Java_org_yuzu_yuzu_1emu_features_input_NativeInput_assignPlayer(
 
     // A pad plays as a single player
     for (size_t index = 0; index < HANDHELD_PLAYER_INDEX; ++index) {
-        const Common::ParamPackage button_a{players[index].buttons[Settings::NativeButton::A]};
-        if (index != player_index && players[index].connected &&
-            button_a.Get("engine", "") == "android" && button_a.Get("guid", "") == guid &&
-            button_a.Get("port", 0) == j_port) {
+        const auto pad = AndroidPadOf(players[index]);
+        if (index != player_index && players[index].connected && pad.Get("guid", "") == guid &&
+            pad.Get("port", 0) == j_port) {
             players[index].connected = false;
         }
     }
     ReloadChangedPlayers(previous);
+}
+
+jstring Java_org_yuzu_yuzu_1emu_features_input_NativeInput_getPlayerPadImpl(JNIEnv* env,
+                                                                            jobject j_obj,
+                                                                            jint j_player_index) {
+    const auto& player =
+        Settings::values.players.GetValue()[static_cast<size_t>(j_player_index)];
+    return Common::Android::ToJString(env, AndroidPadOf(player).Serialize());
+}
+
+void Java_org_yuzu_yuzu_1emu_features_input_NativeInput_resetControllerState(JNIEnv* env,
+                                                                              jobject j_obj,
+                                                                              jstring j_guid,
+                                                                              jint j_port) {
+    EmulationSession::GetInstance().GetInputSubsystem().GetAndroid()->ResetControllerState(
+        Common::Android::GetJString(env, j_guid), static_cast<size_t>(j_port));
 }
 
 void Java_org_yuzu_yuzu_1emu_features_input_NativeInput_releasePlayer(JNIEnv* env, jobject j_obj,

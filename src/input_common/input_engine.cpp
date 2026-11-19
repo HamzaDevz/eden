@@ -3,6 +3,7 @@
 // SPDX-FileCopyrightText: Copyright 2021 yuzu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <vector>
 #include "common/logging.h"
 #include "common/assert.h"
 #include "input_common/input_engine.h"
@@ -254,6 +255,43 @@ void InputEngine::ResetAnalogState() {
         for (const auto& axis : controller.second.axes) {
             SetAxis(controller.first, axis.first, 0.0f);
         }
+    }
+}
+
+void InputEngine::ResetControllerState(const PadIdentifier& identifier) {
+    std::vector<int> buttons;
+    std::vector<int> hat_buttons;
+    std::vector<int> axes;
+    {
+        std::scoped_lock lock{mutex};
+        const auto controller = controller_list.find(identifier);
+        if (controller == controller_list.end()) {
+            return;
+        }
+        for (const auto& [button, value] : controller->second.buttons) {
+            if (value) {
+                buttons.push_back(button);
+            }
+        }
+        for (const auto& [button, value] : controller->second.hat_buttons) {
+            if (value != 0) {
+                hat_buttons.push_back(button);
+            }
+        }
+        for (const auto& [axis, value] : controller->second.axes) {
+            if (value != 0.0f) {
+                axes.push_back(axis);
+            }
+        }
+    }
+    for (const int button : buttons) {
+        SetButton(identifier, button, false);
+    }
+    for (const int button : hat_buttons) {
+        SetHatButton(identifier, button, 0);
+    }
+    for (const int axis : axes) {
+        SetAxis(identifier, axis, 0.0f);
     }
 }
 

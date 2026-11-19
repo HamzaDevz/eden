@@ -247,6 +247,21 @@ object NativeInput {
     external fun releasePlayer(playerIndex: Int)
 
     /**
+     * Gets the Android pad a player plays with, from any of its inputs, or an empty package.
+     * @param playerIndex Index of the player to check.
+     */
+    fun getPlayerPad(playerIndex: Int): ParamPackage = ParamPackage(getPlayerPadImpl(playerIndex))
+
+    private external fun getPlayerPadImpl(playerIndex: Int): String
+
+    /**
+     * Releases everything a pad that went away held, as its player may stay connected.
+     * @param guid GUID of the pad.
+     * @param port Port of the pad.
+     */
+    external fun resetControllerState(guid: String, port: Int)
+
+    /**
      * Saves an input profile.
      * @param name Name of the profile to save.
      * @param playerIndex Index of the player that's currently being edited. Used to write the profile

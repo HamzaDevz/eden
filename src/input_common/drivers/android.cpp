@@ -53,6 +53,10 @@ void Android::SetAxisPosition(std::string guid, size_t port, int axis_id, float 
     SetAxis(identifier, axis_id, value);
 }
 
+void Android::ResetControllerState(std::string guid, size_t port) {
+    InputEngine::ResetControllerState(GetIdentifier(guid, port));
+}
+
 void Android::SetMotionState(std::string guid, size_t port, u64 delta_timestamp, float gyro_x,
                              float gyro_y, float gyro_z, float accel_x, float accel_y,
                              float accel_z) {

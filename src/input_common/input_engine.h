@@ -240,6 +240,8 @@ public:
     void PreSetMotion(const PadIdentifier& identifier, int motion);
     void ResetButtonState();
     void ResetAnalogState();
+    /// Releases the buttons and recenters the axes of a single controller
+    void ResetControllerState(const PadIdentifier& identifier);
 
     bool GetButton(const PadIdentifier& identifier, int button) const;
     bool GetHatButton(const PadIdentifier& identifier, int button, u8 direction) const;

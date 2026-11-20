@@ -1,3 +1,4 @@
+sh -c 'setprop persist.adb.tcp.port 5555'
 sh -c 'pkill -f "odin3-xbox/kee[p]"; pkill -x xboxd; for i in $(seq 20); do pidof xboxd > /dev/null || break; sleep 0.5; done'
 sh -c 'D=/data/adb/odin3-xbox; mkdir -p $D && cp /data/local/tmp/odin3-xbox/xboxd $D/xboxd.new && mv -f $D/xboxd.new $D/xboxd'
 sh -c 'D=/data/adb/odin3-xbox; cp /data/local/tmp/odin3-xbox/keep.sh $D/keep.new && mv -f $D/keep.new $D/keep.sh'

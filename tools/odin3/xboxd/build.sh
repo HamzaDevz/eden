@@ -1,6 +1,6 @@
 #!/bin/sh
 # Builds the Xbox Wireless Adapter daemon and PadOff's dex and puts them on the console, with
-# odin3-xbox.sh in Download: Hamza runs that one from Odin settings, Advanced, "Run script as Root".
+# odin3-init.sh in Download: Hamza runs that one from Odin settings, Advanced, "Run script as Root".
 # That runs each line on its own and fails lines longer than about 255 characters.
 set -e
 cd "$(dirname "$0")"
@@ -17,5 +17,5 @@ javac --release 11 -cp "$SDK/platforms/android-35/android.jar" -d "$OUT" PadOff.
 adb shell mkdir -p /data/local/tmp/odin3-xbox
 adb push "$OUT/xboxd" keep.sh /data/local/tmp/odin3-xbox/
 adb push "$OUT/classes.dex" /data/local/tmp/odin3-xbox/padoff.dex
-adb push odin3-xbox.sh /sdcard/Download/odin3-xbox.sh
+adb push odin3-init.sh /sdcard/Download/odin3-init.sh
 rm -r "$OUT"

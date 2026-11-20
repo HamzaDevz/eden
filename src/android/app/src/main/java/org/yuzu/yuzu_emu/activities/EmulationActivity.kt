@@ -65,6 +65,7 @@ import org.yuzu.yuzu_emu.utils.Log
 import org.yuzu.yuzu_emu.utils.MemoryUtil
 import org.yuzu.yuzu_emu.utils.NativeConfig
 import org.yuzu.yuzu_emu.utils.NfcReader
+import org.yuzu.yuzu_emu.utils.PadBatteryWatcher
 import org.yuzu.yuzu_emu.utils.ParamPackage
 import org.yuzu.yuzu_emu.utils.TermuxHook
 import org.yuzu.yuzu_emu.utils.ThemeHelper
@@ -271,6 +272,7 @@ class EmulationActivity : AppCompatActivity(), SensorEventListener, InputManager
         startMotionSensorListener()
         InputHandler.updateControllerData()
         notifyPhysicalControllerState()
+        PadBatteryWatcher.start(this)
         if (hasEmulationSession) {
             TermuxHook.start(this)
         }
@@ -281,6 +283,7 @@ class EmulationActivity : AppCompatActivity(), SensorEventListener, InputManager
     override fun onPause() {
         nfcReader.stopScanning()
         stopMotionSensorListener()
+        PadBatteryWatcher.stop(this)
         TermuxHook.stop()
         super.onPause()
     }

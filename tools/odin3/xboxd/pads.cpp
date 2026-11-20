@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cctype>
 #include <cerrno>
 #include <climits>
 #include <cstdio>
@@ -25,6 +26,7 @@
 #include <linux/input.h>
 
 #include "log.h"
+#include "notify.h"
 
 namespace {
 constexpr const char* INPUT_NODES = "/sys/class/input/event*";
@@ -80,6 +82,40 @@ std::string Battery(const std::string& address) {
         }
     }
     return "unknown";
+}
+
+/// How the console's notifications name a controller, told from another of its kind by address
+std::string Label(const std::string& name, const std::string& address) {
+    std::string kind = name;
+    if (name.find("Xbox") != std::string::npos) {
+        kind = "Manette Xbox";
+    } else if (name == "Wireless Controller") {
+        kind = "Manette PS4";
+    } else if (name.find("DualSense") != std::string::npos) {
+        kind = "Manette PS5";
+    } else if (name.find("Pro Controller") != std::string::npos) {
+        kind = "Manette Pro";
+    }
+    std::string end = address.substr(address.size() > 5 ? address.size() - 5 : 0);
+    std::transform(end.begin(), end.end(), end.begin(), ::toupper);
+    return kind + " " + end;
+}
+
+/// The battery as the notifications show it, empty when the Bluetooth stack is to tell
+std::string Shown(const std::string& battery) {
+    if (battery == "unknown") {
+        return {};
+    }
+    const std::string percent = battery.substr(0, battery.find('%')) + " %";
+    if (battery.find("Charging") != std::string::npos) {
+        return percent + " en charge";
+    }
+    return battery.find("Full") != std::string::npos ? percent + " pleine" : percent;
+}
+
+bool IsLow(const std::string& battery) {
+    return battery != "unknown" && battery.find("Discharging") != std::string::npos &&
+           std::atoi(battery.c_str()) <= 20;
 }
 
 /// AYN's com.odin.mapping deletes a Bluetooth gamepad's node to hide it behind its own copy, so a
@@ -160,6 +196,7 @@ void BluetoothPads::Update() {
         }
         Log::info("Pad %s left after %d min, battery %s", it->first.c_str(),
                   Minutes(Clock::now() - it->second.connected), it->second.battery.c_str());
+        Notify::Hide(it->first);
         it = pads.erase(it);
     }
 }
@@ -219,6 +256,9 @@ void BluetoothPads::Open(const std::string& sysfs, const std::string& device) {
         pad = {ReadLine(sysfs + "/device/name"), now, now, Battery(address)};
         Log::info("Pad %s connected (%s), battery %s", address.c_str(), pad.name.c_str(),
                   pad.battery.c_str());
+        const std::string label = Label(pad.name, address);
+        Notify::Show(address, label, Shown(pad.battery), address, IsLow(pad.battery),
+                     label + " connectée");
     }
 }
 
@@ -251,6 +291,9 @@ void BluetoothPads::Check(const std::string& address, Pad& pad) {
     if (battery != pad.battery) {
         Log::info("Pad %s battery %s after %d min", address.c_str(), battery.c_str(),
                   Minutes(now - pad.connected));
+        const std::string label = Label(pad.name, address);
+        Notify::Show(address, label, Shown(battery), address, IsLow(battery),
+                     IsLow(battery) && !IsLow(pad.battery) ? label + " : batterie faible" : "");
         pad.battery = battery;
     }
     if (now - pad.last_used >= idle_limit) {

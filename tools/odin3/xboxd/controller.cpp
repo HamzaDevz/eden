@@ -3,9 +3,11 @@
 
 #include <chrono>
 #include <cstring>
+#include <string>
 
 #include "controller.h"
 #include "log.h"
+#include "notify.h"
 
 namespace {
 // Accessories use IDs greater than zero
@@ -74,8 +76,22 @@ void Controller::statusReceived(uint8_t id, const StatusData* status) {
     if (status->batteryType == BATT_TYPE_CHARGING || level == batteryLevel) {
         return;
     }
+    const bool rechargeable = status->batteryType == BATT_TYPE_NIMH;
     Log::info("Controller %d battery level: %s (%s)", slot, levels[level],
-              status->batteryType == BATT_TYPE_NIMH ? "rechargeable" : "alkaline");
+              rechargeable ? "rechargeable" : "alkaline");
+    const char* batteries[] = {"batterie vide", "batterie faible", "batterie moyenne",
+                               "batterie pleine"};
+    const char* cells[] = {"piles vides", "piles faibles", "piles moyennes", "piles pleines"};
+    const std::string label = "Manette Xbox " + std::to_string(slot + 1) + " (adaptateur)";
+    const bool low = level <= 1;
+    std::string alert;
+    if (batteryLevel == 0xff) {
+        alert = label + " connectée";
+    } else if (low && batteryLevel > 1) {
+        alert = label + (rechargeable ? " : batterie faible" : " : piles faibles");
+    }
+    Notify::Show("dongle" + std::to_string(slot), label,
+                 (rechargeable ? batteries : cells)[level], "", low, alert);
     batteryLevel = level;
 }
 

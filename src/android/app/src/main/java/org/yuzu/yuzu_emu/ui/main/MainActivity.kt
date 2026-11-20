@@ -351,6 +351,12 @@ class MainActivity : AppCompatActivity(), ThemeProvider {
         ThemeHelper.setCorrectTheme(this)
         super.onResume()
         applyFullscreenPreference()
+        PadBatteryWatcher.start(this)
+    }
+
+    override fun onPause() {
+        PadBatteryWatcher.stop(this)
+        super.onPause()
     }
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {

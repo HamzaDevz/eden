@@ -36,6 +36,7 @@
 
 #include "dongle.h"
 #include "log.h"
+#include "notify.h"
 #include "pads.h"
 
 namespace {
@@ -314,6 +315,7 @@ ControllerEvents MakeEvents() {
         if (slot < gamepads.size()) {
             gamepads[slot].reset();
         }
+        Notify::Hide("dongle" + std::to_string(slot));
     };
     events.input = [](uint8_t slot, const ControllerState& state) {
         std::lock_guard lock(gamepads_mutex);
@@ -498,6 +500,7 @@ int main(int argc, char** argv) {
     std::signal(SIGPIPE, SIG_IGN);
     setvbuf(stderr, nullptr, _IOLBF, 0);
     Log::info("Started, firmware in %s", firmware_dir.c_str());
+    Notify::Clear();
 
     std::thread rumble_thread(ProcessRumble);
     {

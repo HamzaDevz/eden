@@ -6,6 +6,7 @@
 
 package org.yuzu.yuzu_emu.utils
 
+import android.os.SystemClock
 import android.view.InputDevice
 import android.view.KeyEvent
 import android.view.MotionEvent
@@ -255,35 +256,77 @@ object InputHandler {
         else -> axis
     }
 
-    // Each pad's port among those of its GUID, by descriptor, kept while it stays connected
-    private val ports = mutableMapOf<String, Pair<String, Int>>()
+    private data class Identity(val guid: String, val port: Int)
+
+    private class Pad(var identity: Identity, val name: String, val isCopy: Boolean, val since: Long)
+
+    // Each connected pad's GUID and port, by device ID, kept while it stays connected
+    private val pads = mutableMapOf<Int, Pad>()
+
+    // Pads that just left while playing, for an AYN copy that shows up as one to carry on as it
+    private val departures = mutableListOf<Pair<Pad, Long>>()
+
+    // How long after the copied pad leaves AYN moves its copy to another one
+    private const val COPY_MOVE_MS = 2000L
 
     fun getDevices(): Map<Int, YuzuPhysicalDevice> {
         val gameControllerDeviceIds = mutableMapOf<Int, YuzuPhysicalDevice>()
         val devices: List<InputDevice> = InputDevice.getDeviceIds().toList()
             .mapNotNull { InputDevice.getDevice(it) }.filter { isPhysicalGameController(it) }
-        // Ports count per GUID, so a binding survives other controllers coming and going: a pad
-        // keeps its port while another of its kind leaves, and one that comes back takes the
-        // lowest free one, which gives it its player back when it was the one to leave.
-        ports.keys.retainAll(devices.map { it.descriptor }.toSet())
+        val now = SystemClock.uptimeMillis()
+        val ids = devices.map { it.id }.toSet()
+        departures.removeAll { now - it.second > COPY_MOVE_MS }
+        pads.filterKeys { it !in ids }.values.filter { holdsPlayer(it.identity) }
+            .forEach { departures.add(it to now) }
+        pads.keys.retainAll(ids)
         val inputSettings = NativeConfig.getInputSettings(true)
         devices.forEach { device ->
             device.apply {
                 if (!gameControllerDeviceIds.contains(controllerNumber)) {
-                    val guid = getGUID()
-                    val port = ports[descriptor]?.takeIf { it.first == guid }?.second
-                        ?: ports.values.filter { it.first == guid }.map { it.second }.toSet()
-                            .let { used -> generateSequence(0) { it + 1 }.first { it !in used } }
-                    ports[descriptor] = guid to port
+                    // Ports count per GUID, so a binding survives other controllers coming and
+                    // going: a pad keeps its port while another of its kind leaves, and one that
+                    // comes back takes the lowest free one, which gives it its player back when it
+                    // was the one to leave.
+                    val pad = pads.getOrPut(id) {
+                        Pad(Identity(getGUID(), freePort(getGUID())), name, isAynCopy(this), now)
+                    }
+                    // When the pad AYN copies leaves, AYN copies another one, whose own device
+                    // goes away as the copy shows up: the copy carries on as that pad, player and
+                    // all, rather than as the one that left. A copy made again of the same pad
+                    // carries on as the copy it replaces.
+                    if (pad.isCopy && pad.identity.guid == getGUID() &&
+                        now - pad.since <= COPY_MOVE_MS
+                    ) {
+                        departures.filter { (gone, _) ->
+                            gone.name == name &&
+                                pads.values.none { it !== pad && it.identity == gone.identity }
+                        }.minByOrNull { if (it.first.isCopy) 1 else 0 }?.let {
+                            departures.remove(it)
+                            pad.identity = it.first.identity
+                        }
+                    }
                     gameControllerDeviceIds[controllerNumber] = YuzuPhysicalDevice(
                         this,
-                        port,
-                        inputSettings[port].useSystemVibrator
+                        pad.identity.guid,
+                        pad.identity.port,
+                        inputSettings[pad.identity.port].useSystemVibrator
                     )
                 }
             }
         }
         return gameControllerDeviceIds
+    }
+
+    private fun freePort(guid: String): Int {
+        val used = pads.values.map { it.identity }.filter { it.guid == guid }.map { it.port }
+            .toSet()
+        return generateSequence(0) { it + 1 }.first { it !in used }
+    }
+
+    private fun holdsPlayer(identity: Identity): Boolean = (0 until PLAYER_COUNT).any {
+        val params = NativeInput.getPlayerPad(it)
+        NativeInput.getIsConnected(it) && params.get("engine", "") == "android" &&
+            params.get("guid", "") == identity.guid && params.get("port", 0) == identity.port
     }
 
     fun updateControllerData() {
@@ -311,6 +354,9 @@ object InputHandler {
     // AYN's mapping service hides real controllers behind uinput copies under its own vendor ID
     // and flips their product ID with the trigger layout, so those are told apart by name.
     private const val AYN_VENDOR_ID = 0x2020
+
+    private fun isAynCopy(device: InputDevice): Boolean =
+        device.vendorId == AYN_VENDOR_ID && device.name != BUILT_IN_CONTROLLER_NAME
 
     fun InputDevice.getGUID(): String = if (vendorId == AYN_VENDOR_ID) {
         String.format("%016x%016x", name.hashCode().toLong() and 0xFFFFFFFFL, vendorId)

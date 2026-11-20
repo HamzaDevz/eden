@@ -8,7 +8,6 @@ import androidx.annotation.Keep
 import org.yuzu.yuzu_emu.YuzuApplication
 import org.yuzu.yuzu_emu.R
 import org.yuzu.yuzu_emu.utils.InputHandler
-import org.yuzu.yuzu_emu.utils.InputHandler.getGUID
 
 @Keep
 interface YuzuInputDevice {
@@ -28,6 +27,7 @@ interface YuzuInputDevice {
 
 class YuzuPhysicalDevice(
     private val device: InputDevice,
+    private val guid: String,
     private val port: Int,
     useSystemVibrator: Boolean
 ) : YuzuInputDevice {
@@ -42,7 +42,7 @@ class YuzuPhysicalDevice(
     }
 
     override fun getGUID(): String {
-        return device.getGUID()
+        return guid
     }
 
     override fun getPort(): Int {

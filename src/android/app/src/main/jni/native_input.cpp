@@ -526,7 +526,14 @@ void Java_org_yuzu_yuzu_1emu_features_input_NativeInput_releasePlayer(JNIEnv* en
                                                                       jint j_player_index) {
     auto& players = Settings::values.players.GetValue();
     const auto previous = players;
-    players[static_cast<size_t>(j_player_index)].connected = false;
+    auto& player = players[static_cast<size_t>(j_player_index)];
+    player.connected = false;
+    // Its pad went away: plugged in again without one (the AIs' through the game bridge), the
+    // player must not take that pad's inputs when it comes back, which joins on a press instead
+    player.buttons.fill({});
+    player.analogs.fill({});
+    player.motions.fill({});
+    player.profile_name.clear();
     ReloadChangedPlayers(previous);
 }
 

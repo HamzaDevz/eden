@@ -9,7 +9,7 @@
 #include <memory>
 #include <mutex>
 
-#include <fmt/format.h>
+#include <format>
 
 #include "video_core/renderer_vulkan/renderer_vulkan.h"
 
@@ -81,8 +81,10 @@ VkViewport GetViewportState(const Device& device, const Maxwell& regs, size_t in
                           src.swizzle.y == Maxwell::ViewportSwizzle::NegativeY;
 
     if (lower_left) {
-        // Flip by surface clip height
-        y += conv(static_cast<f32>(regs.surface_clip.height));
+        // min() fixes 2D games (Unepic, Aggelos); otherwise flip by surface clip height.
+        const float clip_height = conv(static_cast<f32>(regs.surface_clip.height));
+        const float flip_height = (height < clip_height) ? height : clip_height;
+        y += flip_height;
         height = -height;
     }
 
@@ -248,6 +250,15 @@ void RasterizerVulkan::PrepareDraw(bool is_indexed, Func&& draw_func) {
     std::scoped_lock lock{buffer_cache.mutex, texture_cache.mutex};
     // update engine as channel may be different.
     pipeline->SetEngine(maxwell3d, gpu_memory);
+    attribute_handle_pipeline = nullptr;
+    attribute_handle_runs.clear();
+    if (split_attribute_handles && pipeline->UsesAttributeHandle()) {
+        CollectAttributeHandleRuns(is_indexed);
+        if (!attribute_handle_runs.empty()) {
+            attribute_handle_pipeline = pipeline;
+            pipeline->SetAttributeHandle(attribute_handle_runs.front().handle);
+        }
+    }
     if (!pipeline->Configure(is_indexed))
         return;
 
@@ -259,31 +270,119 @@ void RasterizerVulkan::PrepareDraw(bool is_indexed, Func&& draw_func) {
     draw_func();
 }
 
+void RasterizerVulkan::CollectAttributeHandleRuns(bool is_indexed) {
+    using VertexAttribute = Maxwell::VertexAttribute;
+    const auto& regs = maxwell3d->regs;
+    const auto& draw_state = maxwell3d->draw_manager.draw_state;
+    const u32 total = is_indexed ? draw_state.index_buffer.count : draw_state.vertex_buffer.count;
+    if (total == 0) {
+        return;
+    }
+    // The handle is an integer attribute; sprite batches repeat it on every vertex of a quad.
+    const VertexAttribute* source{};
+    for (const auto& attr : regs.vertex_attrib_format) {
+        if (attr.constant || attr.size == VertexAttribute::Size::Invalid) {
+            continue;
+        }
+        if (attr.type == VertexAttribute::Type::UInt || attr.type == VertexAttribute::Type::SInt) {
+            source = &attr;
+            break;
+        }
+    }
+    const auto& stream = regs.vertex_streams[source ? source->buffer.Value() : 0];
+    if (!source || !stream.IsEnabled()) {
+        attribute_handle_runs.push_back({0, total, 0});
+        return;
+    }
+    // Only plain triangle lists are split; anything else keeps the handle of its first vertex.
+    const u32 primitive_size =
+        draw_state.topology == Maxwell::PrimitiveTopology::Triangles ? 3 : total;
+    const GPUVAddr base_address = stream.Address() + source->offset;
+    const auto read_handle = [&](u32 position) {
+        u32 vertex;
+        if (is_indexed) {
+            const auto& index_buffer = draw_state.index_buffer;
+            const GPUVAddr address =
+                index_buffer.IndexStart() + size_t{position} * index_buffer.FormatSizeInBytes();
+            u32 index{};
+            gpu_memory->ReadBlockUnsafe(address, &index, index_buffer.FormatSizeInBytes());
+            vertex = static_cast<u32>(draw_state.base_index + index);
+        } else {
+            vertex = draw_state.vertex_buffer.first + position;
+        }
+        return gpu_memory->Read<u32>(base_address + static_cast<GPUVAddr>(vertex) * stream.stride);
+    };
+    for (u32 position = 0; position + primitive_size <= total; position += primitive_size) {
+        const u32 handle = read_handle(position);
+        if (!attribute_handle_runs.empty() && attribute_handle_runs.back().handle == handle) {
+            attribute_handle_runs.back().count += primitive_size;
+        } else {
+            attribute_handle_runs.push_back({position, primitive_size, handle});
+        }
+    }
+    if (attribute_handle_runs.empty()) {
+        attribute_handle_runs.push_back({0, total, read_handle(0)});
+    } else {
+        const u32 covered = attribute_handle_runs.back().first + attribute_handle_runs.back().count;
+        if (covered < total) {
+            attribute_handle_runs.back().count += total - covered;
+        }
+    }
+}
+
 void RasterizerVulkan::Draw(bool is_indexed, u32 instance_count) {
+    split_attribute_handles = true;
+    SCOPE_EXIT {
+        split_attribute_handles = false;
+    };
     PrepareDraw(is_indexed, [this, is_indexed, instance_count] {
         const auto& draw_state = maxwell3d->draw_manager.draw_state;
         const u32 num_instances{instance_count};
         const DrawParams draw_params{MakeDrawParams(draw_state, num_instances, is_indexed)};
 
-        scheduler.Record([draw_params](vk::CommandBuffer cmdbuf) {
-            if (draw_params.is_indexed) {
-                cmdbuf.DrawIndexed(draw_params.num_vertices, draw_params.num_instances,
-                                   draw_params.first_index, draw_params.base_vertex,
-                                   draw_params.base_instance);
-            } else {
-                cmdbuf.Draw(draw_params.num_vertices, draw_params.num_instances,
-                            draw_params.base_vertex, draw_params.base_instance);
+        const auto record_draw = [this](const DrawParams& params) {
+            scheduler.Record([params](vk::CommandBuffer cmdbuf) {
+                if (params.is_indexed) {
+                    cmdbuf.DrawIndexed(params.num_vertices, params.num_instances,
+                                       params.first_index, params.base_vertex,
+                                       params.base_instance);
+                } else {
+                    cmdbuf.Draw(params.num_vertices, params.num_instances, params.base_vertex,
+                                params.base_instance);
+                }
+            });
+        };
+        if (attribute_handle_pipeline && attribute_handle_runs.size() > 1) {
+            // The first run is already configured, each further one binds its own texture.
+            for (size_t i = 0; i < attribute_handle_runs.size(); ++i) {
+                const AttributeHandleRun& run = attribute_handle_runs[i];
+                if (i != 0) {
+                    attribute_handle_pipeline->SetAttributeHandle(run.handle);
+                    if (!attribute_handle_pipeline->Configure(is_indexed)) {
+                        continue;
+                    }
+                }
+                DrawParams run_params = draw_params;
+                run_params.num_vertices = run.count;
+                if (is_indexed) {
+                    run_params.first_index += run.first;
+                } else {
+                    run_params.base_vertex += run.first;
+                }
+                record_draw(run_params);
             }
-        });
+        } else {
+            record_draw(draw_params);
+        }
 
         // Log draw call
         if (GPU::Logging::IsActive() &&
             Settings::values.gpu_log_vulkan_calls.GetValue()) {
             const std::string params = is_indexed ?
-                fmt::format("vertices={}, instances={}, firstIndex={}, baseVertex={}, baseInstance={}",
+                std::format("vertices={}, instances={}, firstIndex={}, baseVertex={}, baseInstance={}",
                     draw_params.num_vertices, draw_params.num_instances,
                     draw_params.first_index, draw_params.base_vertex, draw_params.base_instance) :
-                fmt::format("vertices={}, instances={}, firstVertex={}, firstInstance={}",
+                std::format("vertices={}, instances={}, firstVertex={}, firstInstance={}",
                     draw_params.num_vertices, draw_params.num_instances,
                     draw_params.base_vertex, draw_params.base_instance);
             GPU::Logging::GPULogger::GetInstance().LogVulkanCall(
@@ -340,7 +439,7 @@ void RasterizerVulkan::DrawIndirect() {
         // Log indirect draw call
         if (GPU::Logging::IsActive() &&
             Settings::values.gpu_log_vulkan_calls.GetValue()) {
-            const std::string log_params = fmt::format("drawCount={}, stride={}",
+            const std::string log_params = std::format("drawCount={}, stride={}",
                 params.max_draw_counts, params.stride);
             GPU::Logging::GPULogger::GetInstance().LogVulkanCall(
                 params.is_indexed ? "vkCmdDrawIndexedIndirect" : "vkCmdDrawIndirect",
@@ -393,8 +492,35 @@ void RasterizerVulkan::DrawTexture() {
                                     .y = ScaleSrc(draw_texture_state.src_y1)}};
     Extent3D src_size = {static_cast<u32>(ScaleSrc(texture.size.width)),
                          static_cast<u32>(ScaleSrc(texture.size.height)), texture.size.depth};
+    // DrawTexture rectangles go through the fragment pipeline, scissor included.
+    std::optional<VkRect2D> scissor;
+    if (maxwell3d->regs.scissor_test[0].enable) {
+        u32 up_scale = 1;
+        u32 down_shift = 0;
+        if (dst_rescaling) {
+            up_scale = Settings::values.resolution_info.up_scale;
+            down_shift = Settings::values.resolution_info.down_shift;
+        }
+        scissor = GetScissorState(maxwell3d->regs, 0, up_scale, down_shift);
+    }
+
+    // Drawing a texture 1:1 onto itself without blending changes nothing on hardware, but here
+    // it samples the image the render pass is writing to: undefined in Vulkan, and on tiled GPUs
+    // it reads whatever the image memory last held. Crysis Remastered does this every frame for
+    // its post-processing buffers (suspected cause of its map covering the whole screen).
+    const auto& fb_images = framebuffer->Images();
+    const bool src_is_target =
+        std::find(fb_images.begin(), fb_images.begin() + framebuffer->NumImages(),
+                  texture.ImageHandle()) != fb_images.begin() + framebuffer->NumImages();
+    if (src_is_target && src_rescaling == dst_rescaling &&
+        src_region.start.x == dst_region.start.x && src_region.start.y == dst_region.start.y &&
+        src_region.end.x == dst_region.end.x && src_region.end.y == dst_region.end.y &&
+        maxwell3d->regs.blend.enable[0] == 0) {
+        return;
+    }
+
     blit_image.BlitColor(framebuffer, texture.RenderTarget(), texture.ImageHandle(),
-                         sampler->Handle(), dst_region, src_region, src_size);
+                         sampler->Handle(), dst_region, src_region, src_size, scissor);
 }
 
 void RasterizerVulkan::Clear(u32 layer_count) {
@@ -596,6 +722,12 @@ void RasterizerVulkan::DispatchCompute() {
         return;
     }
 
+    const auto update_images_written_by_buffers = [this] {
+        buffer_cache.ForEachWrittenComputeStorageBuffer(
+            [this](auto& buffer, u32 offset, DAddr device_addr, u32 size) {
+                texture_cache.UpdateImagesFromBuffer(device_addr, size, buffer.Handle(), offset);
+            });
+    };
     const auto& qmd{kepler_compute->launch_description};
     auto indirect_address = kepler_compute->GetIndirectComputeAddress();
     if (indirect_address) {
@@ -612,6 +744,7 @@ void RasterizerVulkan::DispatchCompute() {
             }
             cmdbuf.DispatchIndirect(indirect_buffer, indirect_offset);
         });
+        update_images_written_by_buffers();
         return;
     }
     const std::array<u32, 3> dim{qmd.grid_dim_x, qmd.grid_dim_y, qmd.grid_dim_z};
@@ -634,11 +767,12 @@ void RasterizerVulkan::DispatchCompute() {
         }
         cmdbuf.Dispatch(dim[0], dim[1], dim[2]);
     });
+    update_images_written_by_buffers();
 
     // Log compute dispatch
     if (GPU::Logging::IsActive() &&
         Settings::values.gpu_log_vulkan_calls.GetValue()) {
-        const std::string params = fmt::format("groupCountX={}, groupCountY={}, groupCountZ={}",
+        const std::string params = std::format("groupCountX={}, groupCountY={}, groupCountZ={}",
             dim[0], dim[1], dim[2]);
         GPU::Logging::GPULogger::GetInstance().LogVulkanCall(
             "vkCmdDispatch", params, VK_SUCCESS);
@@ -1667,12 +1801,8 @@ void RasterizerVulkan::UpdateDepthClampEnable(Tegra::Engines::Maxwell3D::Regs& r
     if (!device.SupportsDynamicState3DepthClampEnable()) {
         return;
     }
-    bool is_enabled = !(regs.viewport_clip_control.geometry_clip ==
-                            Maxwell::ViewportClipControl::GeometryClip::Passthrough ||
-                        regs.viewport_clip_control.geometry_clip ==
-                            Maxwell::ViewportClipControl::GeometryClip::FrustumXYZ ||
-                        regs.viewport_clip_control.geometry_clip ==
-                            Maxwell::ViewportClipControl::GeometryClip::FrustumZ);
+    const bool is_enabled =
+        MaxwellDepthClampClip(regs, device.IsExtDepthClipEnableSupported()).clamp;
     scheduler.Record(
         [is_enabled](vk::CommandBuffer cmdbuf) { cmdbuf.SetDepthClampEnableEXT(is_enabled); });
 }

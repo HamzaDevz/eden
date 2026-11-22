@@ -45,7 +45,8 @@ enum class ResultStatus : u16;
 } // namespace Loader
 
 namespace Core::Memory {
-struct CheatEntry;
+struct CheatList;
+struct RuntimeCheatInfo;
 class Memory;
 } // namespace Core::Memory
 
@@ -192,10 +193,8 @@ public:
     std::unique_lock<std::mutex> StallApplication();
     void UnstallApplication();
 
-    void NotifyNVDECChannelOpen(u64 process_id);
-    void NotifyNVDECChannelClose(u64 process_id);
+    void SetNVDECActive(bool is_nvdec_active);
     [[nodiscard]] bool GetNVDECActive();
-    [[nodiscard]] bool IsNVDECActiveForProcess(u64 process_id);
 
     /**
      * Initialize the debugger.
@@ -342,9 +341,16 @@ public:
 
     [[nodiscard]] FileSys::VirtualFilesystem GetFilesystem() const;
 
-    void RegisterCheatList(const std::vector<Memory::CheatEntry>& list,
+    /// Cheats of every process are kept, but only those of the application process run.
+    void RegisterCheatList(Kernel::KProcess& process, Memory::CheatList list,
                            const std::array<u8, 0x20>& build_id, u64 main_region_begin,
                            u64 main_region_size);
+    /// Must be called before the process is released.
+    void UnregisterCheatList(const Kernel::KProcess& process);
+    /// Cheats of the application process.
+    [[nodiscard]] std::vector<Memory::RuntimeCheatInfo> GetRuntimeCheats() const;
+    /// Toggles a cheat, or every regular cheat in a submenu or in the whole menu (CHEAT_MENU_ROOT)
+    bool SetCheatEnabled(u32 id, bool enabled);
 
     void SetFrontendAppletSet(Service::AM::Frontend::FrontendAppletSet&& set);
 

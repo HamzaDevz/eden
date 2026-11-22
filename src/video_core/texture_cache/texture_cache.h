@@ -6,6 +6,7 @@
 
 #pragma once
 
+#include <algorithm>
 #include <limits>
 #include <optional>
 #include <bit>
@@ -214,6 +215,7 @@ typename P::ImageView& TextureCache<P>::GetImageView(u32 index) noexcept {
 template <class P>
 void TextureCache<P>::MarkModification(ImageId id) noexcept {
     MarkModification(slot_images[id]);
+    QueuePreemptiveDownload(id);
 }
 
 template <class P>
@@ -594,6 +596,36 @@ void TextureCache<P>::WriteMemory(DAddr cpu_addr, size_t size) {
             UntrackImage(image, image_id);
         }
     });
+}
+
+template <class P>
+template <typename BufferHandle>
+void TextureCache<P>::UpdateImagesFromBuffer(DAddr cpu_addr, size_t size, BufferHandle buffer,
+                                             u64 buffer_offset) {
+    if constexpr (requires(Image& image) { image.UploadSwizzledFromBuffer(buffer, buffer_offset); }) {
+        // The guest can write a render target through a storage buffer bound over its memory
+        // (e.g. a compute clear). Only images the binding matches exactly are replaced, a larger
+        // binding may hold unrelated live images in the parts the shader does not write.
+        static constexpr size_t MAX_BINDING_PADDING = 64 * 1024;
+        ForEachImageInRegion(cpu_addr, size, [&](ImageId image_id, Image& image) {
+            if (image.cpu_addr != cpu_addr || size < image.guest_size_bytes ||
+                size - image.guest_size_bytes > MAX_BINDING_PADDING ||
+                True(image.flags & ImageFlagBits::Remapped) ||
+                True(image.flags & ImageFlagBits::Sparse)) {
+                return;
+            }
+            if (!image.UploadSwizzledFromBuffer(buffer, buffer_offset)) {
+                return;
+            }
+            if (True(image.flags & ImageFlagBits::CpuModified)) {
+                image.flags &= ~ImageFlagBits::CpuModified;
+                if (False(image.flags & ImageFlagBits::Tracked)) {
+                    TrackImage(image, image_id);
+                }
+            }
+            MarkModification(image);
+        });
+    }
 }
 
 template <class P>
@@ -1935,7 +1967,26 @@ ImageViewId TextureCache<P>::FindDepthBuffer() {
     if (gpu_addr == 0) {
         return ImageViewId{};
     }
-    const ImageInfo info(regs.zeta, regs.zeta_size, regs.anti_alias_samples_mode);
+    // Target-independent rasterization: the depth buffer keeps the raster sample count while
+    // the color targets use anti_alias_samples_mode.
+    Tegra::Texture::MsaaMode zeta_msaa_mode = regs.anti_alias_samples_mode;
+    if (regs.anti_alias_raster != Tegra::Engines::Maxwell3D::Regs::AntiAliasRaster::Mode1x1) {
+        const auto raster_mode = static_cast<Tegra::Texture::MsaaMode>(regs.anti_alias_raster);
+        bool use_raster = regs.tir_mode == Tegra::Engines::Maxwell3D::Regs::TIRMode::RasterNTargetM;
+        if (!use_raster && regs.anti_alias_samples_mode == Tegra::Texture::MsaaMode::Msaa1x1) {
+            // Clears can be issued before tir_mode is enabled. Only a depth buffer sized for the
+            // raster samples relative to the color target is treated as multisampled, otherwise
+            // it ping-pongs between a 1x and a multisampled image every frame.
+            const auto& rt0 = regs.rt[0];
+            use_raster = rt0.Address() != 0 && rt0.format != Tegra::RenderTargetFormat::NONE &&
+                         regs.zeta_size.width == rt0.width * NumSamplesX(raster_mode) &&
+                         regs.zeta_size.height == rt0.height * NumSamplesY(raster_mode);
+        }
+        if (use_raster) {
+            zeta_msaa_mode = raster_mode;
+        }
+    }
+    const ImageInfo info(regs.zeta, regs.zeta_size, zeta_msaa_mode);
     return FindRenderTargetView(info, gpu_addr);
 }
 
@@ -2523,6 +2574,7 @@ void TextureCache<P>::PrepareImage(ImageId image_id, bool is_modification, bool 
     }
     if (is_modification) {
         MarkModification(image);
+        QueuePreemptiveDownload(image_id);
     }
     lru_cache.Touch(image.lru_index, frame_tick);
 }
@@ -2625,6 +2677,26 @@ void TextureCache<P>::CopyImage(ImageId dst_id, ImageId src_id, std::vector<Imag
         UNIMPLEMENTED_IF(copy.extent != scaled_extent);
 
         runtime.ConvertImage(dst_framebuffer, dst_view, src_view);
+    }
+}
+
+template <class P>
+void TextureCache<P>::QueuePreemptiveDownload(ImageId image_id) {
+    // Images the CPU has read back (forced_flushed) are downloaded preemptively so later reads see
+    // the GPU result without a synchronous flush. Render targets queue this when they are bound;
+    // images written in any other way (blits, copies, storage writes) have to queue it here or
+    // the CPU keeps reading the contents of its first readback.
+    if constexpr (IMPLEMENTS_ASYNC_DOWNLOADS) {
+        if (!slot_images[image_id].info.forced_flushed) {
+            return;
+        }
+        const bool is_queued =
+            std::ranges::any_of(uncommitted_downloads, [image_id](const PendingDownload& download) {
+                return download.is_swizzle && download.object_id == image_id;
+            });
+        if (!is_queued) {
+            uncommitted_downloads.emplace_back(PendingDownload{true, 0, image_id});
+        }
     }
 }
 

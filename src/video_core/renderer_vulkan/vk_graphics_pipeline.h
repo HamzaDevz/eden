@@ -110,6 +110,16 @@ public:
         return configure_func(this, is_indexed);
     }
 
+    /// True when a shader samples a texture whose handle arrives as a vertex attribute.
+    [[nodiscard]] bool UsesAttributeHandle() const noexcept {
+        return uses_attribute_handle;
+    }
+
+    /// Handle bound to those textures by the next Configure.
+    void SetAttributeHandle(u32 handle) noexcept {
+        attribute_handle = handle;
+    }
+
     [[nodiscard]] GraphicsPipeline* Next(const GraphicsPipelineCacheKey& current_key) noexcept {
         if (key == current_key) {
             return this;
@@ -121,6 +131,11 @@ public:
 
     [[nodiscard]] bool IsBuilt() const noexcept {
         return is_built.load(std::memory_order::relaxed);
+    }
+
+    /// A stage writes memory (storage buffers, images, global memory)
+    [[nodiscard]] bool HasSideEffects() const noexcept {
+        return has_side_effects;
     }
 
     template <typename Spec>
@@ -168,6 +183,8 @@ private:
     u32 num_descriptor_entries{};
     size_t num_image_elements{};
     u32 num_textures{};
+    u32 attribute_handle{};
+    bool uses_attribute_handle{};
     bool fragment_has_color0_output{};
 
     vk::DescriptorSetLayout descriptor_set_layout;
@@ -178,6 +195,7 @@ private:
 
     DescriptorBufferLayout descriptor_buffer_layout;
     std::vector<DescriptorUpdateEntry> last_descriptor_payload;
+    bool has_side_effects{false};
     VkDeviceSize last_descriptor_buffer_offset{};
     u32 last_descriptor_buffer_chunk{};
     u64 last_descriptor_buffer_generation{};

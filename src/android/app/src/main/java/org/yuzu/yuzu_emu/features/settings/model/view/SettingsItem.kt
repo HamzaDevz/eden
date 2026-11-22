@@ -317,6 +317,13 @@ abstract class SettingsItem(
                 )
             )
             put(
+                SwitchSetting(
+                    BooleanSetting.ENABLE_CHEATS_BY_DEFAULT,
+                    titleId = R.string.enable_cheats_by_default,
+                    descriptionId = R.string.enable_cheats_by_default_description
+                )
+            )
+            put(
                 SingleChoiceSetting(
                     IntSetting.REGION_INDEX,
                     titleId = R.string.emulated_region,
@@ -337,19 +344,6 @@ abstract class SettingsItem(
                     BooleanSetting.USE_CUSTOM_RTC,
                     titleId = R.string.use_custom_rtc,
                     descriptionId = R.string.use_custom_rtc_description
-                )
-            )
-            put(
-                StringInputSetting(
-                    StringSetting.WEB_TOKEN,
-                    titleId = R.string.web_token,
-                    descriptionId = R.string.web_token_description,
-                    onGenerate = {
-                        val chars = "abcdefghijklmnopqrstuvwxyz"
-                        (1..48).map { chars.random() }.joinToString("")
-                    },
-                    validator = NetDataValidators::token,
-                    errorId = R.string.multiplayer_token_error
                 )
             )
 
@@ -857,13 +851,6 @@ abstract class SettingsItem(
                     BooleanSetting.SKIP_CPU_INNER_INVALIDATION,
                     titleId = R.string.skip_cpu_inner_invalidation,
                     descriptionId = R.string.skip_cpu_inner_invalidation_description
-                )
-            )
-            put(
-                SwitchSetting(
-                    BooleanSetting.NCE_INVALIDATION_GPU_READBACK,
-                    titleId = R.string.nce_invalidation_gpu_readback,
-                    descriptionId = R.string.nce_invalidation_gpu_readback_description
                 )
             )
             put(

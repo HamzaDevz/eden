@@ -946,6 +946,8 @@ TextureCacheRuntime::TextureCacheRuntime(const Device& device_, Scheduler& sched
         astc_decoder_pass.emplace(device, scheduler, descriptor_pool, staging_buffer_pool,
                                   compute_pass_descriptor_queue, memory_allocator);
     }
+    bl2d_buffer_unswizzle_pass.emplace(device, scheduler, descriptor_pool, staging_buffer_pool,
+                                       compute_pass_descriptor_queue);
     if (!device.IsKhrImageFormatListSupported()) {
         return;
     }
@@ -1087,6 +1089,58 @@ VkImageView TextureCacheRuntime::GetOrCreateResolveShadow(VkImage msaa_image, Vk
     shadow.aspect_mask = aspect_mask;
     shadow.up_to_date = false;
     return *shadow.view;
+}
+
+VkImageView TextureCacheRuntime::GetOrCreateTirColorScratch(VkImage color_image, VkFormat format,
+                                                            VkExtent2D extent, u32 layers,
+                                                            VkSampleCountFlagBits samples) {
+    TirColorScratch& scratch = tir_color_scratch[color_image];
+    if (scratch.image && scratch.format == format && scratch.extent.width == extent.width &&
+        scratch.extent.height == extent.height && scratch.layers == layers &&
+        scratch.samples == samples) {
+        return *scratch.view;
+    }
+    if (scratch.image) {
+        scheduler.Finish();
+    }
+    scratch.image = memory_allocator.CreateImage(VkImageCreateInfo{
+        .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
+        .pNext = nullptr,
+        .flags = 0,
+        .imageType = VK_IMAGE_TYPE_2D,
+        .format = format,
+        .extent = {extent.width, extent.height, 1},
+        .mipLevels = 1,
+        .arrayLayers = layers,
+        .samples = samples,
+        .tiling = VK_IMAGE_TILING_OPTIMAL,
+        .usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
+        .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
+        .queueFamilyIndexCount = 0,
+        .pQueueFamilyIndices = nullptr,
+        .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+    });
+    scratch.view = device.GetLogical().CreateImageView(VkImageViewCreateInfo{
+        .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
+        .pNext = nullptr,
+        .flags = 0,
+        .image = *scratch.image,
+        .viewType = layers > 1 ? VK_IMAGE_VIEW_TYPE_2D_ARRAY : VK_IMAGE_VIEW_TYPE_2D,
+        .format = format,
+        .components{},
+        .subresourceRange{
+            .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+            .baseMipLevel = 0,
+            .levelCount = 1,
+            .baseArrayLayer = 0,
+            .layerCount = layers,
+        },
+    });
+    scratch.format = format;
+    scratch.extent = extent;
+    scratch.layers = layers;
+    scratch.samples = samples;
+    return *scratch.view;
 }
 
 const TextureCacheRuntime::ResolveShadow* TextureCacheRuntime::GetValidResolveShadow(
@@ -1255,7 +1309,8 @@ void TextureCacheRuntime::ReinterpretImage(Image& dst, Image& src,
 
         cmdbuf.PipelineBarrier(vk::PIPELINE_STAGE_GRAPHICS_COMPUTE_TRANSFER, VK_PIPELINE_STAGE_TRANSFER_BIT,
                        0, READ_BARRIER, {}, middle_out_barrier);
-        cmdbuf.CopyBufferToImage(copy_buffer, dst_image, VK_IMAGE_LAYOUT_GENERAL, vk_out_copies);
+        cmdbuf.CopyBufferToImage(copy_buffer, dst_image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                                 vk_out_copies);
         cmdbuf.PipelineBarrier(VK_PIPELINE_STAGE_TRANSFER_BIT, vk::PIPELINE_STAGE_GRAPHICS_COMPUTE,
                        0, {}, {}, post_barriers);
     });
@@ -1544,19 +1599,23 @@ void TextureCacheRuntime::CopyImage(Image& dst, Image& src,
     // As per the size-compatible formats section of vulkan, copy manually via ReinterpretImage
     // these images that aren't size-compatible
     if (BytesPerBlock(src.info.format) != BytesPerBlock(dst.info.format)) {
-#ifdef _WIN32
-        // On Windows, linear images cause device loss when used in image copies.
-        // Tested with TitleID: 0x010067300059A00 (Mario + Rabbids Kingdom Battle)
-        if (src.info.type == ImageType::Linear || dst.info.type == ImageType::Linear) {
-            return;
-        }
-#endif
-        auto oneCopy = VideoCommon::ImageCopy{
+        // Copy the whole image, clamped to the texels the source can provide. ReinterpretImage
+        // rescales the source width by the format ratio, so an unclamped destination-sized copy
+        // would read past the source image and fill destination rows out of order.
+        const u32 bpp_src = BytesPerBlock(src.info.format) / DefaultBlockWidth(src.info.format);
+        const u32 bpp_dst = BytesPerBlock(dst.info.format) / DefaultBlockWidth(dst.info.format);
+        const VideoCommon::ImageCopy one_copy{
             .src_offset = VideoCommon::Offset3D(0, 0, 0),
             .dst_offset = VideoCommon::Offset3D(0, 0, 0),
-            .extent = dst.info.size
+            .extent =
+                {
+                    .width = (std::min)(dst.info.size.width,
+                                        src.info.size.width * bpp_src / bpp_dst),
+                    .height = (std::min)(dst.info.size.height, src.info.size.height),
+                    .depth = (std::min)(dst.info.size.depth, src.info.size.depth),
+                },
         };
-        return ReinterpretImage(dst, src, std::span{&oneCopy, 1});
+        return ReinterpretImage(dst, src, std::span{&one_copy, 1});
     }
     boost::container::small_vector<VkImageCopy, 16> vk_copies(copies.size());
     const VkImageAspectFlags aspect_mask = dst.AspectMask();
@@ -2070,6 +2129,27 @@ void Image::UploadMemory(VkBuffer buffer, VkDeviceSize offset,
     if (is_rescaled) {
         ScaleUp();
     }
+}
+
+bool Image::UploadSwizzledFromBuffer(VkBuffer buffer, VkDeviceSize offset) {
+    if (runtime == nullptr || !runtime->bl2d_buffer_unswizzle_pass || offset % 4 != 0 ||
+        guest_size_bytes > runtime->device.GetMaxStorageBufferRange() ||
+        !BlockLinearUnswizzle2DBufferPass::IsSupported(*this)) {
+        return false;
+    }
+    if (ENABLE_MSAA_RESOLVE_CONSUME) {
+        runtime->InvalidateResolveShadow(Handle());
+    }
+    auto [linear_buffer, copies] =
+        runtime->bl2d_buffer_unswizzle_pass->Unswizzle(*this, buffer, offset);
+    const VkImage vk_image = *original_image;
+    const VkImageAspectFlags vk_aspect_mask = aspect_mask;
+    const bool was_initialized = std::exchange(initialized, true);
+    scheduler->Record([linear_buffer, vk_image, vk_aspect_mask, was_initialized,
+                       copies = std::move(copies)](vk::CommandBuffer cmdbuf) {
+        CopyBufferToImage(cmdbuf, linear_buffer, vk_image, vk_aspect_mask, was_initialized, copies);
+    });
+    return true;
 }
 
 void Image::UploadMemory(const StagingBufferRef& map, std::span<const BufferImageCopy> copies) {
@@ -2974,6 +3054,26 @@ Framebuffer::Framebuffer(TextureCacheRuntime& runtime, ImageView* color_buffer,
 
 Framebuffer::~Framebuffer() = default;
 
+/// Single-sampled color targets with a multisampled depth buffer, as used by target-independent
+/// rasterization. Vulkan requires matching sample counts for these attachments.
+static bool IsMixedSamplesTarget(std::span<ImageView*, NUM_RT> color_buffers,
+                                 const ImageView* depth_buffer) {
+    if (depth_buffer == nullptr || depth_buffer->Samples() == VK_SAMPLE_COUNT_1_BIT) {
+        return false;
+    }
+    bool has_color = false;
+    for (const ImageView* const color_buffer : color_buffers) {
+        if (color_buffer == nullptr) {
+            continue;
+        }
+        if (color_buffer->Samples() != VK_SAMPLE_COUNT_1_BIT) {
+            return false;
+        }
+        has_color = true;
+    }
+    return has_color;
+}
+
 void Framebuffer::CreateFramebuffer(TextureCacheRuntime& runtime,
                                     std::span<ImageView*, NUM_RT> color_buffers,
                                     ImageView* depth_buffer, bool is_rescaled_) {
@@ -3028,6 +3128,13 @@ void Framebuffer::CreateFramebuffer(TextureCacheRuntime& runtime,
     } else {
         renderpass_key.depth_format = PixelFormat::Invalid;
     }
+    if (IsMixedSamplesTarget(color_buffers, depth_buffer)) {
+        const VkExtent2D extent{(std::min)(render_area.width, width),
+                                (std::min)(render_area.height, height)};
+        CreateMixedSamplesFramebuffer(runtime, color_buffers, attachments, renderpass_key,
+                                      static_cast<u32>((std::max)(num_layers, 1)), extent);
+        return;
+    }
     renderpass_key.samples = samples;
     const bool do_resolve_color = ENABLE_MSAA_TILER_RESOLVE &&
         samples != VK_SAMPLE_COUNT_1_BIT && num_colors > 0 && runtime.device.IsTiler();
@@ -3044,10 +3151,7 @@ void Framebuffer::CreateFramebuffer(TextureCacheRuntime& runtime,
     discard_msaa_depth_stencil = ENABLE_MSAA_RESOLVE_CONSUME &&
                                  ENABLE_MSAA_DEPTH_STENCIL_DISCARD && do_resolve_depth_stencil;
 
-    renderpass = runtime.render_pass_cache.Get(renderpass_key);
-    render_pass_key = renderpass_key;
-    render_pass_cache = &runtime.render_pass_cache;
-    runtime_ptr = &runtime;
+    UseRenderPass(runtime, renderpass_key);
     render_area.width = (std::min)(render_area.width, width);
     render_area.height = (std::min)(render_area.height, height);
 
@@ -3079,6 +3183,53 @@ void Framebuffer::CreateFramebuffer(TextureCacheRuntime& runtime,
     }
 
     num_color_buffers = static_cast<u32>(num_colors);
+    CreateVkFramebuffer(runtime, attachments, static_cast<u32>((std::max)(num_layers, 1)));
+}
+
+void Framebuffer::CreateMixedSamplesFramebuffer(TextureCacheRuntime& runtime,
+                                                std::span<ImageView*, NUM_RT> color_buffers,
+                                                std::span<const VkImageView> attachments,
+                                                RenderPassKey renderpass_key, u32 layers,
+                                                VkExtent2D extent) {
+    // attachments holds the real color targets followed by the depth buffer
+    const size_t num_colors = attachments.size() - 1;
+    boost::container::small_vector<VkImageView, NUM_RT * 2 + 2> mixed_attachments;
+    for (const ImageView* const color_buffer : color_buffers) {
+        if (!color_buffer) {
+            continue;
+        }
+        const VkFormat vk_format = MaxwellToVK::SurfaceFormat(runtime.device, FormatType::Optimal,
+                                                              true, color_buffer->format)
+                                       .format;
+        mixed_attachments.push_back(runtime.GetOrCreateTirColorScratch(
+            color_buffer->ImageHandle(), vk_format, extent, layers, samples));
+    }
+    mixed_attachments.push_back(attachments[num_colors]);
+    for (size_t index = 0; index < num_colors; ++index) {
+        mixed_attachments.push_back(attachments[index]);
+    }
+    // Multisampled scratch color + depth, resolving color into the real single-sampled targets
+    renderpass_key.samples = samples;
+    renderpass_key.resolve_color = true;
+    renderpass_key.resolve_depth_stencil = false;
+    discard_msaa_color = false;
+    discard_msaa_depth_stencil = false;
+    UseRenderPass(runtime, renderpass_key);
+    render_area = extent;
+    num_color_buffers = static_cast<u32>(num_colors);
+    CreateVkFramebuffer(runtime, mixed_attachments, layers);
+}
+
+void Framebuffer::UseRenderPass(TextureCacheRuntime& runtime,
+                                const RenderPassKey& renderpass_key) {
+    renderpass = runtime.render_pass_cache.Get(renderpass_key);
+    render_pass_key = renderpass_key;
+    render_pass_cache = &runtime.render_pass_cache;
+    runtime_ptr = &runtime;
+}
+
+void Framebuffer::CreateVkFramebuffer(TextureCacheRuntime& runtime,
+                                      std::span<const VkImageView> attachments, u32 layers) {
     framebuffer = runtime.device.GetLogical().CreateFramebuffer({
         .sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO,
         .pNext = nullptr,
@@ -3088,7 +3239,7 @@ void Framebuffer::CreateFramebuffer(TextureCacheRuntime& runtime,
         .pAttachments = attachments.data(),
         .width = render_area.width,
         .height = render_area.height,
-        .layers = static_cast<u32>((std::max)(num_layers, 1)),
+        .layers = layers,
     });
 }
 

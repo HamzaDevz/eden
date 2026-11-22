@@ -9,6 +9,7 @@
 #include <cstdio>
 
 #include <bit>
+#include <print>
 
 #ifdef __ANDROID__
 #include <android/trace.h>
@@ -81,13 +82,23 @@ CodePtr AddressSpace::GetOrEmit(IR::LocationDescriptor descriptor) {
     }
 #endif
     GenerateIR(ir_block, descriptor);
-    const EmittedBlockInfo block_info = Emit(std::move(ir_block));
+    CodePtr entry_point;
+    try {
+        entry_point = Emit(std::move(ir_block)).entry_point;
+    } catch (const CodeBufferExhausted&) {
+        // Very large blocks may not fit in what is left of the cache. Emission mutates the IR,
+        // so regenerate it and retry with an empty cache.
+        ProtectCodeMemory();
+        ClearCache();
+        GenerateIR(ir_block, descriptor);
+        entry_point = Emit(std::move(ir_block)).entry_point;
+    }
 #ifdef __ANDROID__
     if (trace) {
         ATrace_endSection();
     }
 #endif
-    return block_info.entry_point;
+    return entry_point;
 }
 
 void AddressSpace::InvalidateBasicBlocks(const ::Common::unordered_set<IR::LocationDescriptor>& descriptors) {
@@ -128,7 +139,7 @@ EmittedBlockInfo AddressSpace::Emit(IR::Block block) {
 
     UnprotectCodeMemory();
 
-    EmittedBlockInfo block_info = EmitArm64(code, std::move(block), GetEmitConfig(), fastmem_manager);
+    EmittedBlockInfo block_info = EmitArm64(code, std::move(block), GetEmitConfig(), fastmem_manager, GetRemainingSize());
 
     ASSERT(block_entries.insert({block.Location(), block_info.entry_point}).second);
     ASSERT(reverse_block_entries.insert({block_info.entry_point, block.Location()}).second);
@@ -369,7 +380,7 @@ FakeCall AddressSpace::FastmemCallback(u64 host_pc) {
     }
 
 fail:
-    fmt::print("dynarmic: Segfault happened within JITted code at host_pc = {:016x}\n"
+    std::print("dynarmic: Segfault happened within JITted code at host_pc = {:016x}\n"
         "Segfault wasn't at a fastmem patch location!\n", host_pc);
     UNREACHABLE();
 }

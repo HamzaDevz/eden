@@ -4,6 +4,7 @@
 #include <array>
 #include <atomic>
 #include <memory>
+#include <mutex>
 #include <unordered_map>
 #include <utility>
 
@@ -68,6 +69,9 @@
 #include "video_core/renderer_base.h"
 #include "video_core/video_core.h"
 
+// This is defined by synchapi.h and conflicts with Timing::CreateEvent
+#undef CreateEvent
+
 namespace Core {
 
 FileSys::VirtualFile GetGameFileFromPath(const FileSys::VirtualFilesystem& vfs,
@@ -82,7 +86,7 @@ FileSys::VirtualFile GetGameFileFromPath(const FileSys::VirtualFilesystem& vfs,
         std::vector<FileSys::VirtualFile> concat;
 
         for (u32 i = 0; i < 0x10; ++i) {
-            const auto file_name = fmt::format("{:02X}", i);
+            const auto file_name = std::format("{:02X}", i);
             auto next = dir->GetFile(file_name);
 
             if (next != nullptr) {
@@ -250,30 +254,12 @@ struct System::Impl {
         }
     }
 
-    void NotifyNVDECChannelOpen(u64 process_id) {
-        std::scoped_lock lock{nvdec_active_mutex};
-        ++nvdec_active_channels[process_id];
-    }
-
-    void NotifyNVDECChannelClose(u64 process_id) {
-        std::scoped_lock lock{nvdec_active_mutex};
-        const auto it = nvdec_active_channels.find(process_id);
-        if (it == nvdec_active_channels.end()) {
-            return;
-        }
-        if (--it->second == 0) {
-            nvdec_active_channels.erase(it);
-        }
+    void SetNVDECActive(bool is_nvdec_active) {
+        nvdec_active = is_nvdec_active;
     }
 
     bool GetNVDECActive() {
-        std::scoped_lock lock{nvdec_active_mutex};
-        return !nvdec_active_channels.empty();
-    }
-
-    bool IsNVDECActiveForProcess(u64 process_id) {
-        std::scoped_lock lock{nvdec_active_mutex};
-        return nvdec_active_channels.contains(process_id);
+        return nvdec_active;
     }
 
     void InitializeDebugger(System& system, u16 port) {
@@ -377,11 +363,6 @@ struct System::Impl {
         // Waiting for GPU before initializing CPU
         cpu_manager.Initialize();
 
-        // Initialize cheat engine
-        if (cheat_engine) {
-            cheat_engine->Initialize();
-        }
-
         // Register with applet manager
         // All threads are started, begin main process execution, now that we're in the clear
         applet_manager.CreateAndInsertByFrontendAppletParameters(std::move(process), params);
@@ -438,11 +419,18 @@ struct System::Impl {
         kernel.SuspendEmulation(true);
         kernel.CloseServices();
         kernel.ShutdownCores();
+        // Before the services: the cheat tick still runs on the timing thread here, and reads the
+        // controllers through the service manager (it crashed in a freed mutex when a game with
+        // cheats was stopped). The tick takes the same lock, so a running one finishes first and
+        // the later ones find no engine.
+        {
+            std::scoped_lock lock{cheat_engines_mutex};
+            cheat_engines.clear();
+        }
         services.reset();
         service_manager.reset();
         game_bridge.reset();
         fs_controller.Reset();
-        cheat_engine.reset();
         core_timing.ClearPendingEvents();
         app_loader.reset();
         audio_core.reset();
@@ -482,8 +470,27 @@ struct System::Impl {
         return perf_stats->GetAndResetStats(core_timing.GetGlobalTimeUs());
     }
 
+    // Cheats run only for the application process, which is also the one frontends show.
+    Memory::CheatEngine* FindApplicationCheatEngine() {
+        const auto it = cheat_engines.find(kernel.ApplicationProcess());
+        return it != cheat_engines.end() ? it->second.get() : nullptr;
+    }
+
     Timing::CoreTiming core_timing;
     Kernel::KernelCore kernel;
+    // Outlive applet owners so process finalization can always unregister its engine.
+    std::mutex cheat_engines_mutex;
+    std::unordered_map<const Kernel::KProcess*, std::unique_ptr<Memory::CheatEngine>> cheat_engines;
+    // Scheduled while any engine is registered.
+    std::shared_ptr<Timing::EventType> cheat_engines_event{Timing::CreateEvent(
+        "CheatEngine::FrameCallback",
+        [this](s64, std::chrono::nanoseconds) -> std::optional<std::chrono::nanoseconds> {
+            std::scoped_lock lock{cheat_engines_mutex};
+            if (auto* const engine = FindApplicationCheatEngine()) {
+                engine->Execute();
+            }
+            return std::nullopt;
+        })};
     /// RealVfsFilesystem instance
     FileSys::VirtualFilesystem virtual_filesystem;
     Service::FileSystem::FileSystemController fs_controller;
@@ -513,7 +520,6 @@ struct System::Impl {
     std::optional<Tegra::Host1x::Host1x> host1x_core;
     std::optional<Core::DeviceMemory> device_memory;
     std::optional<AudioCore::AudioCore> audio_core;
-    std::optional<Memory::CheatEngine> cheat_engine;
     std::optional<Tools::Freezer> memory_freezer;
     std::optional<Tools::RenderdocAPI> renderdoc_api;
     std::unique_ptr<Tools::GameBridge> game_bridge;
@@ -540,8 +546,6 @@ struct System::Impl {
 
     mutable std::mutex suspend_guard;
     std::mutex general_channel_mutex;
-    std::mutex nvdec_active_mutex;
-    std::unordered_map<u64, u32> nvdec_active_channels;
     std::atomic_bool is_paused{};
     std::atomic_bool is_shutting_down{};
     std::atomic_bool is_powered_on{};
@@ -549,6 +553,7 @@ struct System::Impl {
     bool extended_memory_layout : 1 = false;
     bool exit_locked : 1 = false;
     bool exit_requested : 1 = false;
+    bool nvdec_active : 1 = false;
 
     void EnsureGeneralChannelInitialized(System& system) {
         if (!general_channel_event) {
@@ -612,20 +617,12 @@ void System::UnstallApplication() {
     impl->UnstallApplication();
 }
 
-void System::NotifyNVDECChannelOpen(u64 process_id) {
-    impl->NotifyNVDECChannelOpen(process_id);
-}
-
-void System::NotifyNVDECChannelClose(u64 process_id) {
-    impl->NotifyNVDECChannelClose(process_id);
+void System::SetNVDECActive(bool is_nvdec_active) {
+    impl->SetNVDECActive(is_nvdec_active);
 }
 
 bool System::GetNVDECActive() {
     return impl->GetNVDECActive();
-}
-
-bool System::IsNVDECActiveForProcess(u64 process_id) {
-    return impl->IsNVDECActiveForProcess(process_id);
 }
 
 void System::InitializeDebugger() {
@@ -819,11 +816,39 @@ FileSys::VirtualFilesystem System::GetFilesystem() const {
     return impl->virtual_filesystem;
 }
 
-void System::RegisterCheatList(const std::vector<Memory::CheatEntry>& list,
-                               const std::array<u8, 32>& build_id, u64 main_region_begin,
+void System::RegisterCheatList(Kernel::KProcess& process, Memory::CheatList list,
+                               const std::array<u8, 0x20>& build_id, u64 main_region_begin,
                                u64 main_region_size) {
-    impl->cheat_engine.emplace(*this, list, build_id);
-    impl->cheat_engine->SetMainMemoryParameters(main_region_begin, main_region_size);
+    constexpr auto CHEAT_ENGINE_NS = std::chrono::nanoseconds{1000000000 / 12};
+
+    auto engine = std::make_unique<Memory::CheatEngine>(*this, process, std::move(list), build_id,
+                                                        main_region_begin, main_region_size);
+    std::scoped_lock lock{impl->cheat_engines_mutex};
+    if (impl->cheat_engines.empty()) {
+        impl->core_timing.ScheduleLoopingEvent(CHEAT_ENGINE_NS, CHEAT_ENGINE_NS,
+                                               impl->cheat_engines_event);
+    }
+    impl->cheat_engines.insert_or_assign(&process, std::move(engine));
+}
+
+void System::UnregisterCheatList(const Kernel::KProcess& process) {
+    std::scoped_lock lock{impl->cheat_engines_mutex};
+    if (impl->cheat_engines.erase(&process) != 0 && impl->cheat_engines.empty()) {
+        impl->core_timing.UnscheduleEvent(impl->cheat_engines_event,
+                                          Timing::UnscheduleEventType::NoWait);
+    }
+}
+
+std::vector<Memory::RuntimeCheatInfo> System::GetRuntimeCheats() const {
+    std::scoped_lock lock{impl->cheat_engines_mutex};
+    const auto* const engine = impl->FindApplicationCheatEngine();
+    return engine != nullptr ? engine->GetCheats() : std::vector<Memory::RuntimeCheatInfo>{};
+}
+
+bool System::SetCheatEnabled(u32 id, bool enabled) {
+    std::scoped_lock lock{impl->cheat_engines_mutex};
+    auto* const engine = impl->FindApplicationCheatEngine();
+    return engine != nullptr && engine->SetCheatEnabled(id, enabled);
 }
 
 void System::SetFrontendAppletSet(Service::AM::Frontend::FrontendAppletSet&& set) {

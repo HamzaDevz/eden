@@ -755,7 +755,7 @@ struct Memory::Impl {
         PAddr last_address;
     };
 
-    void InvalidateGPUMemory(u8* p, size_t size) {
+    bool TryInvalidateGPUMemory(const u8* p, size_t size) {
         constexpr size_t sys_core = Core::Hardware::NUM_CPU_CORES - 1;
         const size_t core = (std::min)(system.GetCurrentHostThreadID(),
                                      sys_core); // any other calls threads go to syscore.
@@ -771,9 +771,13 @@ struct Memory::Impl {
                 sys_core_guard.unlock();
             }
         };
+        bool has_pending_writes = false;
         auto& gpu = system.GPU();
         gpu_device_memory->ApplyOpOnPointer(
-            p, scratch_buffers[core], [&](DAddr address) { gpu.InvalidateRegion(address, size, true); });
+            p, scratch_buffers[core], [&](DAddr address) { has_pending_writes |= gpu.MustFlushRegion(address, size); });
+        if (has_pending_writes) return false;
+        gpu_device_memory->ApplyOpOnPointer(p, scratch_buffers[core], [&](DAddr address) { gpu.InvalidateRegion(address, size); });
+        return true;
     }
 
     Core::System& system;
@@ -976,7 +980,7 @@ void Memory::MarkRegionDebug(Common::ProcessAddress vaddr, u64 size, bool debug)
     impl->MarkRegionDebug(GetInteger(vaddr), size, debug);
 }
 
-bool Memory::InvalidateNCE(Common::ProcessAddress vaddr, size_t size) {
+NCEAccessFaultAction Memory::InvalidateNCE(Common::ProcessAddress vaddr, size_t size) {
     [[maybe_unused]] bool mapped = true;
     [[maybe_unused]] bool rasterizer = false;
 
@@ -988,17 +992,18 @@ bool Memory::InvalidateNCE(Common::ProcessAddress vaddr, size_t size) {
             mapped = false;
         },
         [&] { rasterizer = true; });
-    if (rasterizer) {
-        impl->InvalidateGPUMemory(ptr, size);
-    }
-
 #ifdef __ANDROID__
     if (!rasterizer && mapped) {
         impl->host_buffer->DeferredMapSeparateHeap(GetInteger(vaddr));
     }
 #endif
 
-    return mapped && ptr != nullptr;
+    if (rasterizer) {
+        if (!impl->TryInvalidateGPUMemory(ptr, size)) {
+            return NCEAccessFaultAction::Instruction;
+        }
+    }
+    return mapped && ptr != nullptr ? NCEAccessFaultAction::Retry : NCEAccessFaultAction::Unmapped;
 }
 
 bool Memory::InvalidateSeparateHeap(void* fault_address) {

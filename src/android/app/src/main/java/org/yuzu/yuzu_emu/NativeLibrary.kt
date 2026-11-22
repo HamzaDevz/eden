@@ -35,6 +35,22 @@ import org.yuzu.yuzu_emu.applets.web.WebBrowser
  */
 object NativeLibrary {
     @Keep
+    class RuntimeCheat(
+        val id: Int,
+        val name: String,
+        val enabled: Boolean,
+        val isMaster: Boolean,
+        val type: Int,
+        val parentId: Int
+    ) {
+        companion object {
+            const val CHEAT = 0
+            const val SUBMENU = 1
+            const val ROOT = -1
+        }
+    }
+
+    @Keep
     data class UpdateResult(
         var tag: String = "",
         var title: String = "",
@@ -196,6 +212,13 @@ object NativeLibrary {
      * Returns true if emulation is paused.
      */
     external fun isPaused(): Boolean
+
+    external fun getRuntimeCheats(): Array<RuntimeCheat>
+
+    /**
+     * Toggles a cheat, or every regular cheat in a group or in the whole list ([RuntimeCheat.ROOT]).
+     */
+    external fun setRuntimeCheatEnabled(id: Int, enabled: Boolean): Boolean
 
     /**
      * Returns the performance stats for the current game

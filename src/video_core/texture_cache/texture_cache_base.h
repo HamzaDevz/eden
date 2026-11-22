@@ -203,6 +203,12 @@ public:
     /// Mark images in a range as modified from the CPU
     void WriteMemory(DAddr cpu_addr, size_t size);
 
+    /// Replaces the contents of the images fully inside a range that a GPU buffer wrote, with the
+    /// data of that buffer
+    template <typename BufferHandle>
+    void UpdateImagesFromBuffer(DAddr cpu_addr, size_t size, BufferHandle buffer,
+                                u64 buffer_offset);
+
     /// Download contents of host images to guest memory in a region
     void DownloadMemory(DAddr cpu_addr, size_t size);
 
@@ -390,6 +396,9 @@ private:
 
     /// Mark an image as modified from the GPU
     void MarkModification(ImageBase& image) noexcept;
+
+    /// Queue an asynchronous download of an image the CPU reads back after GPU modifications
+    void QueuePreemptiveDownload(ImageId image_id);
 
     /// Synchronize image aliases, copying data if needed
     void SynchronizeAliases(ImageId image_id);

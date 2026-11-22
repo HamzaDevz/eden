@@ -10,14 +10,23 @@ list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/CMakeModules")
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/CMakeModules/find")
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/externals/cmake-modules")
 
+# run compiler checks before everything else
+include(CompilerChecks)
+
 set(CPM_SOURCE_CACHE ${CMAKE_SOURCE_DIR}/.cache/cpm)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
-set(CMAKE_CXX_SCAN_FOR_MODULES 0)
+set(CMAKE_CXX_SCAN_FOR_MODULES OFF)
+
+# force cmdlines to use rsp files to avoid 8191 char limit on winblows
+if (CMAKE_GENERATOR MATCHES "Ninja" AND WIN32)
+    set(CMAKE_NINJA_FORCE_RESPONSE_FILE ON)
+endif()
 
 include(DetectPlatform)
 include(DetectArchitecture)
 include(DefaultConfig)
 include(UseLTO)
+include(RemovePGO)
 include(FasterLinker)
 include(UseCcache)
 include(CMakeDependentOption)
@@ -67,7 +76,6 @@ if (YUZU_STATIC_ROOM)
     set(OpenSSL_FORCE_SYSTEM ON)
 
     set(zstd_FORCE_BUNDLED ON)
-    set(fmt_FORCE_BUNDLED ON)
 endif()
 
 # qt stuff
@@ -133,17 +141,17 @@ if (YUZU_STATIC_BUILD)
         set(YUZU_USE_BUNDLED_FFMPEG ON)
         set(YUZU_USE_BUNDLED_SDL3 ON)
         set(YUZU_USE_BUNDLED_OPENSSL ON)
-
-        set(HTTPLIB_USE_BROTLI_IF_AVAILABLE OFF)
     elseif(APPLE)
         set(YUZU_USE_BUNDLED_FFMPEG ON)
         set(YUZU_USE_BUNDLED_SDL3 ON)
         set(YUZU_USE_BUNDLED_OPENSSL ON)
 
         # these libs do not properly provide static libs/let you do it with cmake
-        set(fmt_FORCE_BUNDLED ON)
         set(SPIRV-Headers_FORCE_BUNDLED ON)
         set(zstd_FORCE_BUNDLED ON)
+
+        # broken, idk why
+        set(lz4_FORCE_BUNDLED ON)
     endif()
 endif()
 
@@ -244,7 +252,7 @@ cmake_dependent_option(ENABLE_LIBUSB "Enable the use of LibUSB" ON "WIN32 OR LIN
 cmake_dependent_option(ENABLE_OPENGL "Enable OpenGL" ON "NOT (WIN32 AND ARCHITECTURE_arm64) AND NOT APPLE AND NOT ANDROID" OFF)
 mark_as_advanced(FORCE ENABLE_OPENGL)
 
-option(ENABLE_WEB_SERVICE "Enable web services (telemetry, etc.)" ON)
+option(ENABLE_WEB_SERVICE "Enable web services (multiplayer, etc.)" ON)
 option(ENABLE_WIFI_SCAN "Enable WiFi scanning" OFF)
 
 cmake_dependent_option(USE_DISCORD_PRESENCE "Enables Discord Rich Presence" OFF "ENABLE_QT" OFF)
@@ -368,7 +376,7 @@ endif()
 # Configure C++ standard
 # ===========================
 
-set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # Output binaries to bin/
@@ -401,14 +409,13 @@ if (OpenSSL_ADDED)
     add_compile_definitions(YUZU_BUNDLED_OPENSSL)
 endif()
 
-message(STATUS "Fetching needed dependencies with CPM")
-
 set(BUILD_SHARED_LIBS OFF)
 set(BUILD_TESTING OFF)
 set(ENABLE_TESTING OFF)
 
 # boost
-set(BOOST_INCLUDE_LIBRARIES algorithm icl pool container heap asio headers process filesystem crc variant)
+set(BOOST_INCLUDE_LIBRARIES algorithm icl pool container heap asio headers
+    process filesystem crc variant pfr)
 
 AddJsonPackage(boost)
 
@@ -432,9 +439,6 @@ if (Boost_ADDED)
     endif()
 endif()
 
-# fmt
-AddJsonPackage(fmt)
-
 # lz4
 AddJsonPackage(lz4)
 
@@ -449,9 +453,6 @@ if (zstd_ADDED)
     add_library(zstd::zstd ALIAS libzstd_static)
     add_library(zstd::libzstd ALIAS libzstd_static)
 endif()
-
-# nlohmann
-AddJsonPackage(nlohmann)
 
 if (NOT YUZU_STATIC_ROOM)
     # zlib
@@ -521,7 +522,8 @@ elseif (WIN32)
     set(PLATFORM_LIBRARIES ${PLATFORM_LIBRARIES} winmm iphlpapi ws2_32 wlanapi)
     if (MINGW)
         # PSAPI is the Process Status API
-        set(PLATFORM_LIBRARIES ${PLATFORM_LIBRARIES} psapi imm32 version crypt32 rpcrt4 gdi32 wldap32 mswsock)
+        set(PLATFORM_LIBRARIES ${PLATFORM_LIBRARIES} psapi imm32 version
+            crypt32 rpcrt4 gdi32 wldap32 mswsock bcrypt)
     endif()
 elseif (MANAGARM)
     set(PLATFORM_LIBRARIES iconv intl)
@@ -557,10 +559,6 @@ if (NOT YUZU_STATIC_ROOM)
         find_package(biscuit)
     endif()
 
-    if (ENABLE_WEB_SERVICE OR ENABLE_UPDATE_CHECKER)
-        find_package(cpp-jwt)
-    endif()
-
     if (ARCHITECTURE_arm64 OR DYNARMIC_TESTS)
         find_package(oaknut)
     endif()
@@ -594,7 +592,7 @@ if (ENABLE_QT)
         list(APPEND CMAKE_PREFIX_PATH "${Qt6_DIR}")
     endif()
 
-    find_package(Qt6 REQUIRED COMPONENTS Core)
+    find_package(Qt6 6.5 REQUIRED COMPONENTS Core)
 
     if (NOT DEFINED QT_TARGET_PATH)
         get_target_property(qtcore_path Qt6::Core LOCATION_Release)

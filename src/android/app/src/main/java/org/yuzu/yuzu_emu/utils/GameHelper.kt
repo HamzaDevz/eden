@@ -81,8 +81,8 @@ object GameHelper {
                 gameDirs.removeAt(it - offset)
                 offset++
             }
+            NativeConfig.setGameDirs(gameDirs.toTypedArray())
         }
-        NativeConfig.setGameDirs(gameDirs.toTypedArray())
 
         // Cache list of games found on disk
         val serializedGames = mutableSetOf<String>()
@@ -109,7 +109,7 @@ object GameHelper {
 
     // File extensions considered as external content, buuut should
     // be done better imo.
-    private val externalContentExtensions = setOf("nsp", "xci")
+    private val externalContentExtensions = setOf("nsp", "xci", "nsz", "xcz")
 
     private fun scanContentContainersRecursive(
         files: Array<MinimalDocumentFile>,

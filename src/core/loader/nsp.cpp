@@ -56,6 +56,17 @@ AppLoader_NSP::AppLoader_NSP(FileSys::VirtualFile file_,
 AppLoader_NSP::~AppLoader_NSP() = default;
 
 FileType AppLoader_NSP::IdentifyType(const FileSys::VirtualFile& nsp_file) {
+    // .nsz is NSP-compatible; return NSZ so the game list shows the right type.
+    if (nsp_file->GetName().ends_with(".nsz")) {
+        return FileType::NSZ;
+    }
+
+    // PFS0-shaped .xcz containers are handled by this loader too; report XCZ so the game
+    // list does not show them as NSP. XCI-shaped .xcz is identified by AppLoader_XCI.
+    if (nsp_file->GetName().ends_with(".xcz")) {
+        return FileType::XCZ;
+    }
+
     const FileSys::NSP nsp(nsp_file);
 
     if (nsp.GetStatus() != ResultStatus::Success) {
@@ -178,6 +189,10 @@ ResultStatus AppLoader_NSP::VerifyIntegrity(std::function<bool(size_t, size_t)> 
 }
 
 ResultStatus AppLoader_NSP::ReadRomFS(FileSys::VirtualFile& out_file) {
+    if (nsp->IsExtractedType()) {
+        out_file = nsp->GetRomFS();
+        return out_file != nullptr ? ResultStatus::Success : ResultStatus::ErrorNoRomFS;
+    }
     return secondary_loader->ReadRomFS(out_file);
 }
 
@@ -254,14 +269,23 @@ ResultStatus AppLoader_NSP::ReadManualRomFS(FileSys::VirtualFile& out_file) {
 }
 
 ResultStatus AppLoader_NSP::ReadBanner(std::vector<u8>& buffer) {
+    if (secondary_loader == nullptr) {
+        return ResultStatus::ErrorNotInitialized;
+    }
     return secondary_loader->ReadBanner(buffer);
 }
 
 ResultStatus AppLoader_NSP::ReadLogo(std::vector<u8>& buffer) {
+    if (secondary_loader == nullptr) {
+        return ResultStatus::ErrorNotInitialized;
+    }
     return secondary_loader->ReadLogo(buffer);
 }
 
 ResultStatus AppLoader_NSP::ReadNSOModules(Modules& modules) {
+    if (secondary_loader == nullptr) {
+        return ResultStatus::ErrorNotInitialized;
+    }
     return secondary_loader->ReadNSOModules(modules);
 }
 

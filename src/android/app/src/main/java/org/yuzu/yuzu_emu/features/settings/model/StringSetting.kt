@@ -14,8 +14,8 @@ enum class StringSetting(override val key: String) : AbstractStringSetting {
     LOG_FILTER("log_filter"),
     PROGRAM_ARGS("program_args"),
     POST_SHADER_CHAIN("post_shader_chain"),
+    OVERLAY_CONTROL_COLORS("overlay_control_colors"),
 
-    WEB_TOKEN("eden_token"),
     WEB_USERNAME("eden_username")
     ;
 

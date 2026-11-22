@@ -37,11 +37,8 @@ enum class VfsEntryType {
 // A class representing an abstract filesystem. A default implementation given the root VirtualDir
 // is provided for convenience, but if the Vfs implementation has any additional state or
 // functionality, they will need to override.
-class VfsFilesystem {
+class VfsFilesystem : Common::NonCopyable, Common::NonMoveable{
 public:
-    YUZU_NON_COPYABLE(VfsFilesystem);
-    YUZU_NON_MOVEABLE(VfsFilesystem);
-
     explicit VfsFilesystem(VirtualDir root);
     virtual ~VfsFilesystem();
 
@@ -88,11 +85,8 @@ protected:
 };
 
 // A class representing a file in an abstract filesystem.
-class VfsFile {
+class VfsFile : Common::NonCopyable, Common::NonMoveable {
 public:
-    YUZU_NON_COPYABLE(VfsFile);
-    YUZU_NON_MOVEABLE(VfsFile);
-
     VfsFile() = default;
     virtual ~VfsFile();
 
@@ -111,6 +105,9 @@ public:
     virtual bool IsWritable() const = 0;
     // Returns whether or not the file can be read from.
     virtual bool IsReadable() const = 0;
+
+    // Returns true if this file serves NCA body data that is already decrypted (e.g. NCZ).
+    virtual bool HasDecryptedSections() const { return false; }
 
     // The primary method of reading from the file. Reads length bytes into data starting at offset
     // into file. Returns number of bytes successfully read.
@@ -191,11 +188,8 @@ public:
 };
 
 // A class representing a directory in an abstract filesystem.
-class VfsDirectory {
+class VfsDirectory : Common::NonCopyable, Common::NonMoveable {
 public:
-    YUZU_NON_COPYABLE(VfsDirectory);
-    YUZU_NON_MOVEABLE(VfsDirectory);
-
     VfsDirectory() = default;
     virtual ~VfsDirectory();
 

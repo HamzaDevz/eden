@@ -352,6 +352,12 @@ class MainActivity : AppCompatActivity(), ThemeProvider {
         super.onResume()
         applyFullscreenPreference()
         PadBatteryWatcher.start(this)
+        binding.root.post {
+            if (GameFolderOperations.consumeGameFoldersChanged()) {
+                gamesViewModel.syncFoldersFromNativeConfig()
+                gamesViewModel.reloadGames(directoriesChanged = true)
+            }
+        }
     }
 
     override fun onPause() {
@@ -418,8 +424,8 @@ class MainActivity : AppCompatActivity(), ThemeProvider {
         )
 
         val uriString = result.toString()
-        val folder = gamesViewModel.folders.value.firstOrNull { it.uriString == uriString }
-        if (folder != null) {
+        val alreadyAdded = NativeConfig.getGameDirs().any { it.uriString == uriString }
+        if (alreadyAdded) {
             Toast.makeText(
                 applicationContext,
                 R.string.folder_already_added,
@@ -439,10 +445,8 @@ class MainActivity : AppCompatActivity(), ThemeProvider {
         )
 
         val uriString = result.toString()
-        val folder = gamesViewModel.folders.value.firstOrNull {
-            it.uriString == uriString && it.type == org.yuzu.yuzu_emu.model.DirectoryType.EXTERNAL_CONTENT
-        }
-        if (folder != null) {
+        val alreadyAdded = NativeConfig.getExternalContentDirs().any { it == uriString }
+        if (alreadyAdded) {
             Toast.makeText(
                 applicationContext,
                 R.string.folder_already_added,

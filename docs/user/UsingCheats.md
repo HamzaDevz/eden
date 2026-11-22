@@ -16,7 +16,7 @@ Use this guide when you want to add cheats into a game to alter gameplay for use
 
 ***TIP***: The easiest way I have found to find the Build ID is by Right-Clicking the game **IN RYUJINX ON PC** and hitting **Manage Cheats**.  Your Build ID will be displayed at the top.
 
-Another option would be to launch the game in Eden and close it - then go into the log and look for a line like this - the first 16 characters if your Build ID. Make sure that it is the MAIN line.
+Another option would be to launch the game in Eden and close it - then go into the log and look for a line like this - the first 16 characters of your Build ID. Make sure that it is the MAIN line.
 [ 27.098382] Loader <Info> core/file_sys/patch_manager.cpp:HasNSOPatch:304: Querying NSO patch existence for build_id=AEE6DCCC06D9C05B42061E2019123A61, name=main
 
 </aside>
@@ -45,12 +45,13 @@ Another option would be to launch the game in Eden and close it - then go into t
     ***INFO***: Make sure you select the correct directory or it will not work, the screen should show the **cheats** sub-directory.
     
     </aside>
-2. You should now see the cheat appear in the **Add-ons** screen.
-3. Launch the game and confirm that the cheat is applied.
+
+9. You should now see the cheat appear in the **Add-ons** screen.
+10. Launch the game and confirm that the cheat is applied.
 
 ### Step 2: Multiple Cheats
 
-In order to install multiple cheats, you must repeat the steps above with the new cheat, creating a new directory with the name of the cheat and cheats directory.  You **cannot** install multiple cheats with a single file.
+In order to install multiple cheats, you must repeat the steps above with the new cheat, creating a new directory with the name of the cheat and cheats directory.
 
 Community Member [Ninjistix](https://github.com/Ninjistix) created a utility (Windows or anything that can run Python) that can take a file with multiple cheats and create the files/structure for you with a provided Build ID.  To download and run it, see the [GitHub Project](https://github.com/Ninjistix/nxCheat_Splitter) page.
 
@@ -95,7 +96,7 @@ Cheats are enabled by default, but can be disabled so they don't affect gameplay
 
 ***TIP***: The easiest way I have found to find the Build ID is by Right-Clicking the game **IN RYUJINX** and hitting **Manage Cheats**.  Your Build ID will be displayed at the top. 
 
-Another option would be to launch the game in Eden and close it - then go into the log and look for a line like this - the first 16 characters if your Build ID. **Make sure that it is the MAIN line**.
+Another option would be to launch the game in Eden and close it - then go into the log and look for a line like this - the first 16 characters of your Build ID. **Make sure that it is the MAIN line**.
 `[  27.098382] Loader <Info> core/file_sys/patch_manager.cpp:HasNSOPatch:304: Querying NSO patch existence for build_id=AEE6DCCC06D9C05B42061E2019123A61, name=main`
 
 </aside>
@@ -117,12 +118,12 @@ Another option would be to launch the game in Eden and close it - then go into t
 4. Create a folder inside of the file explorer window with the name of the cheat.  This name does not matter and only affects how it appears in the game properties inside of Eden.
 5. Navigate inside of this folder and create another folder called **cheats.**
 6. Move the txt file you created earlier into this **cheats** folder. (e.g. `<mod_location>/Time 999/cheats/AEE6DCCC06D9C05B.txt` )
-7. Go back to Eden and *right-click* the game.  Select *Configure Game* and you should now see the cheat you created appear in the **Add-Ons** section with the name of the folder from step 6.
+7. Go back to Eden and *right-click* the game.  Select *Configure Game* and you should now see the cheat you created appear in the **Add-Ons** section with the name of the folder from step 4.
 8. Launch the game to verify that the cheat is enabled.
 
 ### Step 2: Multiple Cheats
 
-In order to install multiple cheats, you must repeat the steps above with the new cheat, creating a new directory with the name of the cheat and cheats directory.  You **cannot** install multiple cheats with a single file.
+In order to install multiple cheats, you must repeat the steps above with the new cheat, creating a new directory with the name of the cheat and cheats directory.
 
 Community Member [Ninjistix](https://github.com/Ninjistix) created a utility (Windows or anything that can run Python) that can take a file with multiple cheats and create the files/structure for you with a provided Build ID.  To download and run it, see the [GitHub Project](https://github.com/Ninjistix/nxCheat_Splitter) page.
 
@@ -154,3 +155,45 @@ Cheats are enabled by default, but can be disabled so they don't affect gameplay
 3. *Select/Deselect* the name of the cheat you wish to enable/disable.
 4. Click **OK** to close the window.
 5. Launch the game to confirm the cheat is/is not active.
+
+### Runtime Cheat Controls
+
+* While a game is running, open **Cheats** from the menu bar to toggle individual entries from the loaded cheat files. The menu stays open while toggling entries and is hidden when the running game has no cheats. Runtime changes apply to the current game session only.
+
+* Use **Configure > System > Core > Enable cheats by default** to choose whether regular cheats start enabled. The setting can also be overridden for an individual game from its **System** settings.
+
+* Master Code entries (`{}` blocks) are always enabled and appear as disabled and checked items in the runtime menu.
+
+### EdiZon Submenus and Zing Outline Groups
+
+Cheat files can group their entries with EdiZon Overlay sections or Zing outlines. Groups appear as submenus in the **Cheats** menu and as collapsible rows on Android. Checking a group toggles every cheat inside it.
+
+* [EdiZon Overlay submenus](https://github.com/proferabg/EdiZon-Overlay/blob/main/README.md#how-to-use-submenus) wrap a group of cheats in matching section markers:
+    ```text
+    [--SectionStart:Item Codes--]
+    00000000 00000000 00000000
+
+    [Some Item Cheat Codes]
+    ...
+
+    [--SectionEnd:Item Codes--]
+    00000000 00000000 00000000
+    ```
+    - Sections can be nested. A section ends at the `SectionEnd` entry with the same name.
+    - Add `[--DisableSubmenus--]` followed by `00000000 00000000 00000000` at the top of a file to display that file's cheats without groups.
+
+* [Zing outline groups](https://github.com/tomvita/Zing/blob/master/README.md#creating-outline) start at an entry whose first code is `20000000` and end at an entry whose first code is `20000001`. They are displayed the same way as EdiZon submenus.
+    ```text
+    [Item Codes]
+    20000000
+
+    [Some Item Cheat Codes]
+    ...
+
+    [End Item Codes]
+    20000001
+    ```
+    - Outline groups cannot be nested. A new start entry ends the current group, and so does entering or leaving an EdiZon section.
+    - The end entry is not displayed.
+
+* Section, outline and `--DisableSubmenus--` entries only describe the menu: their codes never reach the cheat VM. The cheats inside a group run as usual. The Master Code is never treated as one of these entries.

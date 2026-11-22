@@ -248,11 +248,14 @@ public:
     void FlushRegion(DAddr addr, u64 size);
 
     /// Notify rasterizer that any caches of the specified region should be invalidated
-    void InvalidateRegion(DAddr addr, u64 size, bool preserve_gpu_writes = false);
+    void InvalidateRegion(DAddr addr, u64 size);
 
     /// Notify rasterizer that CPU is trying to write this area. It returns true if the area is
     /// sensible, false otherwise, addr and size must be a valid combination
     bool OnCPUWrite(DAddr addr, u64 size);
+
+    /// Check whether this range still has GPU writes that must be flushed to CPU memory.
+    bool MustFlushRegion(DAddr addr, u64 size);
 
     /// Notify rasterizer that any caches of the specified region should be flushed and invalidated
     void FlushAndInvalidateRegion(DAddr addr, u64 size);

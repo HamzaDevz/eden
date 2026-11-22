@@ -6,10 +6,31 @@ General guide for cross compiling.
 
 A painless guide for cross compilation (or to test NCE) from a x86_64 system without polluting your main.
 
-- Install QEMU: `sudo pkg install qemu`
-- Download Debian 13: `wget https://cdimage.debian.org/debian-cd/current/arm64/iso-cd/debian-13.0.0-arm64-netinst.iso`
-- Create a system disk: `qemu-img create -f qcow2 debian-13-arm64-ci.qcow2 30G`
-- Run the VM: `qemu-system-aarch64 -M virt -m 2G -cpu max -bios /usr/local/share/qemu/edk2-aarch64-code.fd -drive if=none,file=debian-13.0.0-arm64-netinst.iso,format=raw,id=cdrom -device scsi-cd,drive=cdrom -drive if=none,file=debian-13-arm64-ci.qcow2,id=hd0,format=qcow2 -device virtio-blk-device,drive=hd0 -device virtio-gpu-pci -device usb-ehci -device usb-kbd -device intel-hda -device hda-output -nic user,model=virtio-net-pci`
+```sh
+#!/bin/sh
+ISO_FILE="debian-13.0.0-arm64-netinst.iso"
+DISK_FILE="debian-13-arm64-ci.qcow2"
+which -- qemu-system-aarch64 || sudo pkg install qemu
+[ -f "$ISO_FILE" ] || wget https://cdimage.debian.org/debian-cd/current/arm64/iso-cd/$ISO_FILE
+[ -f "$DISK_FILE" ] || qemu-img create -f qcow2 "$DISK_FILE" 30G
+QEMU_FLAGS=(
+    -M virt
+    -m 2G
+    -cpu max
+    -bios /usr/local/share/qemu/edk2-aarch64-code.fd
+    -drive if=none,file=$ISO_FILE,format=raw,id=cdrom
+    -drive if=none,file=$DISK_FILE,id=hd0,format=qcow2
+    -device scsi-cd,drive=cdrom
+    -device virtio-blk-device,drive=hd0
+    -device virtio-gpu-pci
+    -device usb-ehci
+    -device usb-kbd
+    -device intel-hda
+    -device hda-output
+    -nic user,model=virtio-net-pci
+)
+qemu-system-aarch64 "${QEMU_FLAGS[@]}"
+```
 
 ## Gentoo
 
@@ -45,7 +66,7 @@ Dependencies are the same [as normal Gentoo](./Deps.md#Commands); simply replace
 
 #### Enabling GURU
 
-Since Crossdev sysroots are effectively isolated from the system w.r.t Portage, you must manually enable GURU in your sysroot. Run the following as root:
+Since Crossdev sysroots are effectively isolated from the system w.r.t. Portage, you must manually enable GURU in your sysroot. Run the following as root:
 
 ```sh
 mkdir -p /usr/aarch64-unknown-linux-gnu/etc/portage/repos.conf
@@ -59,7 +80,7 @@ EOF
 
 #### Package Errata
 
-Crossdev is not perfect, and you may face some challenges with package that are not properly keyworded or have issues on specific architectures. These behaviors are, unfortunately, not well documented, and certain build systems such as Meson--and certain troublesome packages like GTK--are generally unfriendly towards cross-compilation.
+Crossdev is not perfect, and you may face some challenges with packages that are not properly keyworded or have issues on specific architectures. These behaviors are, unfortunately, not well documented, and certain build systems such as Meson--and certain troublesome packages like GTK--are generally unfriendly towards cross-compilation.
 
 Thus, it may be desirable to emerge a minimal set of dependencies and allow Eden's build system to handle the rest for you. At a minimum, you *only* need standard system libraries (Crossdev does this for you) and Qt:
 

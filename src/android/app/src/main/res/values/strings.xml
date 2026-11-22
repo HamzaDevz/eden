@@ -31,6 +31,59 @@
     <string name="overlay_grid_size">Grid Size</string>
     <string name="overlay_grid_size_description">Size of the grid cells in pixels</string>
     <string name="input_overlay_behavior">Behavior</string>
+    <string name="overlay_color">Change overlay color</string>
+    <string name="overlay_color_customize">Customize Overlay Color</string>
+    <string name="overlay_color_customize_summary">Modify the color of the on-screen controls</string>
+    <string name="overlay_color_section_create_use">Create/Use Overlays</string>
+    <string name="overlay_color_section_manage_files">Manage Overlay Files</string>
+    <string name="overlay_import_color_config">Import Color Config</string>
+    <string name="overlay_import_color_config_summary">Load a saved overlay color design from a .edenovl file</string>
+    <string name="overlay_export_color_config">Export Color Config</string>
+    <string name="overlay_export_color_config_summary">Save a custom overlay color design to a .edenovl file</string>
+    <string name="overlay_color_app_theme">App theme</string>
+    <string name="overlay_color_default">Original</string>
+    <string name="overlay_color_hex">Hex Color</string>
+    <string name="overlay_color_presets">Presets</string>
+    <string name="overlay_color_presets_summary">Use a pre-made design or look through your saved custom designs</string>
+    <string name="overlay_color_builtin_header">Pre-made Templates</string>
+    <string name="overlay_color_save_preset_hint">Save your custom design</string>
+    <string name="overlay_color_create_template">Custom Design</string>
+    <string name="overlay_color_create_template_summary">Set the base color and color for each button</string>
+    <string name="overlay_color_base">Base Color</string>
+    <string name="overlay_color_buttons">Buttons</string>
+    <string name="overlay_color_left_stick">Left Stick</string>
+    <string name="overlay_color_right_stick">Right Stick</string>
+    <string name="overlay_color_match_base">Use Base Color</string>
+    <string name="overlay_color_using_base">Using Base Color</string>
+    <string name="overlay_preset_applied">Preset \"%1$s\" applied</string>
+    <string name="overlay_preset_eden">Eden</string>
+    <string name="overlay_preset_joycon">Joy-Con</string>
+    <string name="overlay_preset_super_famicom">Super Famicom</string>
+    <string name="overlay_preset_snes">Super NES</string>
+    <string name="overlay_preset_gamecube">GameCube</string>
+    <string name="overlay_preset_save">Save preset</string>
+    <string name="overlay_preset_name">Preset Name</string>
+    <string name="overlay_preset_saved">Saved %1$s</string>
+    <string name="overlay_preset_saved_header">Saved</string>
+    <string name="overlay_preset_imported_one">Applied %1$s</string>
+    <string name="overlay_import_pick_one">Choose a design to import</string>
+    <string name="overlay_export_pick_one">Choose a design to export</string>
+    <string name="overlay_export_current">Current on-screen colors</string>
+    <string name="overlay_export_none">Nothing to export. Save a custom design first, or change colors away from a built-in preset.</string>
+    <string name="overlay_preset_same_as_builtin">These colors already match %1$s. Use Presets instead of saving a copy.</string>
+    <string name="overlay_preset_name_taken">That name matches a built-in preset. Choose a different name.</string>
+    <string name="overlay_preset_overwrite">Replace saved design?</string>
+    <string name="overlay_preset_overwrite_message">A design named \"%1$s\" is already saved. Replace it with this one?</string>
+    <string name="overlay_preset_overwrite_confirm">Replace</string>
+    <string name="overlay_preset_exported">Design exported</string>
+    <string name="overlay_preset_import_failed">Importing failed, check the file\'s syntax for errors</string>
+    <string name="overlay_import_edenovl_only">Only .edenovl files can be imported</string>
+    <string name="overlay_preset_delete">Delete Preset</string>
+    <string name="overlay_preset_delete_message">Delete %1$s? The colors on screen stay as they are.</string>
+    <string name="overlay_preset_nes">NES</string>
+    <string name="overlay_preset_famicom">Famicom</string>
+    <string name="overlay_stick_left_press">Left Stick Click</string>
+    <string name="overlay_stick_right_press">Right Stick Click</string>
     <string name="overlay_auto_hide">Overlay Auto Hide</string>
     <string name="overlay_auto_hide_description">Automatically hide the touch controls overlay after the specified time of inactivity.</string>
     <string name="enable_input_overlay_auto_hide">Enable Overlay Auto Hide</string>
@@ -193,11 +246,9 @@
     <string name="multiplayer_lobby_type">Lobby Type</string>
     <string name="multiplayer_room_name_error">Must be between 3 and 20 characters</string>
     <string name="multiplayer_required">Required</string>
-    <string name="multiplayer_token_required">Web Token required, go to Advanced Settings -> System -> Network</string>
     <string name="multiplayer_ip_error">Invalid IP format</string>
     <string name="multiplayer_username_error">Must be between 4–20 characters, and contain alphanumeric characters, periods, dashes, underscores, and spaces only</string>
     <string name="multiplayer_nickname_invalid">Username invalid, ensure it is set properly in System -> Network</string>
-    <string name="multiplayer_token_error">Must be 48 characters, and lowercase a-z only</string>
     <string name="multiplayer_port_error">Must be between 1 and 65535</string>
     <string name="cancel">Cancel</string>
     <string name="ok">Ok</string>
@@ -498,7 +549,7 @@
     <string name="user_data_import_failed_description">Make sure the user data folders are at the root of the zip folder and contain a config file at config/config.ini and try again.</string>
     <string name="discord_link" translatable="false">https://discord.gg/HstXbPch7X</string>
     <string name="stoat_link" translatable="false">https://stt.gg/qKgFEAbH</string>
-    <string name="x_link" translatable="false">https://nitter.poast.org/edenemuofficial</string>
+    <string name="x_link" translatable="false">https://x.com/edenemuofficial</string>
     <string name="website_link" translatable="false">https://eden-emu.dev</string>
     <string name="github_link" translatable="false">https://git.eden-emu.dev/eden-emu</string>
 
@@ -542,8 +593,6 @@
     <string name="generate">Generate</string>
 
     <!-- Network settings strings -->
-    <string name="web_token">Web Token</string>
-    <string name="web_token_description">Web token used for creating public lobbies. It is a 48-character string containing only lowercase a-z.</string>
     <string name="web_username">Web Username</string>
     <string name="web_username_description">Username to be shown in multiplayer lobbies. It must be 4–20 characters, containing only alphanumeric characters, dashes, periods, underscores, and spaces.</string>
     <string name="network">Network</string>
@@ -593,10 +642,8 @@
     <string name="fast_gpu_time_description">Makes the game believe GPU work finishes faster than it does, so it stops lowering resolution and render distance to fit the Switch\'s clocks.</string>
     <string name="skip_cpu_inner_invalidation">Skip CPU Inner Invalidation</string>
     <string name="skip_cpu_inner_invalidation_description">Skips certain CPU-side cache invalidations during memory updates, reducing CPU usage and improving it\'s performance. This may cause glitches or crashes on some games.</string>
-    <string name="nce_invalidation_gpu_readback">GPU Readback Before NCE Invalidation</string>
-    <string name="nce_invalidation_gpu_readback_description">Temporary. Fix Ender Magnolia (and other UE titles) crashes. May reduce performance. Improvement in progress.</string>
     <string name="fix_bloom_effects">Fix Bloom Effects</string>
-    <string name="fix_bloom_effects_description">Reduces bloom blur in LA/EOW (Adreno A6XX - A7XX/ Turnip), removes bloom in Burnout. Warning: may cause graphical artifacts in other games.</string>
+    <string name="fix_bloom_effects_description">Removes bloom in Burnout.</string>
     <string name="emulate_bgr565">Emulate BGR565</string>
     <string name="emulate_bgr565_description">Fixes problems with inverted colors in games or strange artifacts or strange shadows.</string>
     <string name="rescale_hack">Enable Legacy Rescale Pass</string>
@@ -842,6 +889,14 @@
     <string name="preferences_graphics">Graphics</string>
     <string name="preferences_graphics_description">Accuracy level, resolution, shader cache</string>
     <string name="quick_settings">Quick Settings</string>
+    <string name="cheats">Cheats</string>
+    <string name="enable_all_cheats">Enable All Cheats</string>
+    <string name="disable_all_cheats">Disable All Cheats</string>
+    <string name="unnamed_cheat">Unnamed Cheat</string>
+    <string name="cheat_submenu_expanded">Expanded</string>
+    <string name="cheat_submenu_collapsed">Collapsed</string>
+    <string name="enable_cheats_by_default">Enable cheats by default</string>
+    <string name="enable_cheats_by_default_description">Enable regular cheats when a game starts</string>
     <string name="enable_quick_settings">Enable Quick Settings</string>
     <string name="enable_quick_settings_description">Allow access to quick settings menu via swipe and menu button</string>
     <string name="preferences_audio">Audio</string>
@@ -1424,7 +1479,7 @@ OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
     </string>
     <string name="license_dynarmic" translatable="false">Dynarmic</string>
     <string name="license_dynarmic_description" translatable="false">An ARM dynamic recompiler</string>
-    <string name="license_dynarmic_link" translatable="false">https://github.com/merryhime/dynarmic</string>
+    <string name="license_dynarmic_link" translatable="false">https://git.eden-emu.dev/eden-emu/dynarmic</string>
     <string name="license_dynarmic_copyright" translatable="false">Copyright © 2017 merryhime</string>
     <string name="license_dynarmic_text" translatable="false">
 Permission to use, copy, modify, and/or distribute this software for

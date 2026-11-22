@@ -165,9 +165,12 @@ bool ArmNce::HandleGuestAccessFault(GuestContext* guest_ctx, void* raw_info, voi
     const Common::ProcessAddress addr =
         (reinterpret_cast<u64>(info->si_addr) & ~Memory::YUZU_PAGEMASK);
     auto& memory = guest_ctx->parent->m_running_thread->GetOwnerProcess()->GetMemory();
-    if (memory.InvalidateNCE(addr, Memory::YUZU_PAGESIZE)) {
-        // We handled the access successfully and are returning to guest code.
+    const auto result = memory.InvalidateNCE(addr, Memory::YUZU_PAGESIZE);
+    if (result == Memory::NCEAccessFaultAction::Retry) {
         return true;
+    }
+    if (result == Memory::NCEAccessFaultAction::Instruction) {
+        return HandleGuestAlignmentFault(guest_ctx, raw_info, raw_context);
     }
 
     // We couldn't handle the access.
@@ -231,7 +234,7 @@ HaltReason ArmNce::RunThread(Kernel::KThread* thread) {
         hr = ReturnToRunCodeByExceptionLevelChange(m_thread_id, thread_params);  // Android: Use "process handle SIGUSR2 -n true -p true -s false" (and SIGURG) in LLDB when debugging
     }
 
-    // Critical section for thread cleanup
+    // Critical section for thread cleanup.
     std::atomic_thread_fence(std::memory_order_acquire);
 
     // Cache values before releasing thread
@@ -369,8 +372,8 @@ void ArmNce::SetContext(const Kernel::Svc::ThreadContext& ctx) {
 }
 
 void ArmNce::SignalInterrupt(Kernel::KThread* thread) {
-    // Add break loop condition.
-    m_guest_ctx.esr_el1.fetch_or(static_cast<u64>(HaltReason::BreakLoop));
+    constexpr u64 break_loop = static_cast<u64>(HaltReason::BreakLoop);
+    if ((m_guest_ctx.esr_el1.fetch_or(break_loop) & break_loop) != 0) return;
 
     auto* params = &thread->GetNativeExecutionParameters();
     LockThreadParameters(params);

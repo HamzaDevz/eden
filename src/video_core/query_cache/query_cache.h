@@ -260,9 +260,7 @@ void QueryCacheBase<Traits>::CounterReport(GPUVAddr addr, QueryType counter_type
     };
     u8* pointer = impl->device_memory.template GetPointer<u8>(cpu_addr);
     u8* pointer_timestamp = impl->device_memory.template GetPointer<u8>(cpu_addr + 8);
-    // Results still waiting behind a fence must not be overtaken by this one
-    const bool keep_order = !Settings::IsGPULevelHigh() && impl->rasterizer.HasPendingSyncOperations();
-    bool is_synced = (Settings::IsGPUFenceBehaviorDefault() ? !Settings::IsGPULevelHigh() : !Settings::IsGPUFenceBehaviorBalanced() && !Settings::IsGPUFenceBehaviorAccurate()) && is_fence && !keep_order;
+    bool is_synced = (Settings::IsGPUFenceBehaviorDefault() ? !Settings::IsGPULevelHigh() : !Settings::IsGPUFenceBehaviorBalanced() && !Settings::IsGPUFenceBehaviorAccurate()) && is_fence;
     std::function<void()> operation([this, is_synced, streamer, query_base = query, query_location,
                                      pointer, pointer_timestamp] {
         if (True(query_base->flags & QueryFlagBits::IsInvalidated)) {
@@ -296,7 +294,7 @@ void QueryCacheBase<Traits>::CounterReport(GPUVAddr addr, QueryType counter_type
     if (is_fence) {
         impl->rasterizer.SignalFence(std::move(operation));
     } else {
-        if (!Settings::IsGPULevelHigh() && counter_type == QueryType::Payload && !keep_order) {
+        if (!Settings::IsGPULevelHigh() && counter_type == QueryType::Payload) {
             if (has_timestamp) {
                 u64 timestamp = impl->gpu.GetTicks();
                 u64 value = static_cast<u64>(payload);

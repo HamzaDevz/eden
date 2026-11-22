@@ -615,10 +615,6 @@ void RasterizerOpenGL::SyncOperation(std::function<void()>&& func) {
     fence_manager.SyncOperation(std::move(func));
 }
 
-bool RasterizerOpenGL::HasPendingSyncOperations() const {
-    return fence_manager.HasPendingOperations();
-}
-
 void RasterizerOpenGL::SignalSyncPoint(u32 value) {
     fence_manager.SignalSyncPoint(value);
 }

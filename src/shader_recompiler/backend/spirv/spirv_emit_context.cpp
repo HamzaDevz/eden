@@ -473,6 +473,13 @@ EmitContext::EmitContext(const Profile& profile_, const RuntimeInfo& runtime_inf
     u32& storage_binding{is_unified ? bindings.unified : bindings.storage_buffer};
     u32& texture_binding{is_unified ? bindings.unified : bindings.texture};
     u32& image_binding{is_unified ? bindings.unified : bindings.image};
+    if (profile.has_broken_spirv_bitfield_insert_after_bitcount) {
+        for (IR::Block* const block : program.blocks) {
+            for (const IR::Inst& inst : block->Instructions()) {
+                emulate_bitfield_insert |= inst.GetOpcode() == IR::Opcode::BitCount32;
+            }
+        }
+    }
     AddCapability(spv::Capability::Shader);
     DefineCommonTypes(program.info);
     DefineCommonConstants();

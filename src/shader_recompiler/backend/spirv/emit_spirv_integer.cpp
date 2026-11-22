@@ -144,7 +144,19 @@ Id EmitBitwiseXor32(EmitContext& ctx, IR::Inst* inst, Id a, Id b) {
 }
 
 Id EmitBitFieldInsert(EmitContext& ctx, Id base, Id insert, Id offset, Id count) {
-    return ctx.OpBitFieldInsert(ctx.U32[1], base, insert, offset, count);
+    if (!ctx.emulate_bitfield_insert) {
+        return ctx.OpBitFieldInsert(ctx.U32[1], base, insert, offset, count);
+    }
+    // Qualcomm rejects the whole pipeline when an OpBitFieldInsert operand derives from OpBitCount
+    const Id one{ctx.Const(1u)};
+    const Id low_mask{ctx.OpISub(ctx.U32[1], ctx.OpShiftLeftLogical(ctx.U32[1], one, count), one)};
+    const Id is_full{ctx.OpUGreaterThanEqual(ctx.U1, count, ctx.Const(32u))};
+    const Id field_mask{ctx.OpSelect(ctx.U32[1], is_full, ctx.Const(0xffffffffu), low_mask)};
+    const Id mask{ctx.OpShiftLeftLogical(ctx.U32[1], field_mask, offset)};
+    const Id kept{ctx.OpBitwiseAnd(ctx.U32[1], base, ctx.OpNot(ctx.U32[1], mask))};
+    const Id inserted{
+        ctx.OpBitwiseAnd(ctx.U32[1], ctx.OpShiftLeftLogical(ctx.U32[1], insert, offset), mask)};
+    return ctx.OpBitwiseOr(ctx.U32[1], kept, inserted);
 }
 
 Id EmitBitFieldSExtract(EmitContext& ctx, IR::Inst* inst, Id base, Id offset, Id count) {

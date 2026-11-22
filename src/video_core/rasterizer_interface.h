@@ -77,6 +77,11 @@ public:
     /// Send an operation to be done after a certain amount of flushes.
     virtual void SyncOperation(std::function<void()>&& func) = 0;
 
+    /// Whether operations sent through SyncOperation are still waiting for their fence
+    [[nodiscard]] virtual bool HasPendingSyncOperations() const {
+        return false;
+    }
+
     /// Signal a GPU based syncpoint as a fence
     virtual void SignalSyncPoint(u32 value) = 0;
 

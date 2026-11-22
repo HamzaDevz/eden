@@ -7,6 +7,7 @@
 #pragma once
 
 #include <algorithm>
+#include <atomic>
 #include <condition_variable>
 #include <cstring>
 #include <deque>
@@ -69,7 +70,13 @@ public:
     }
 
     void SyncOperation(std::function<void()>&& func) {
+        unexecuted_operations.fetch_add(1, std::memory_order_relaxed);
         uncommitted_operations.emplace_back(std::move(func));
+    }
+
+    /// True while operations queued before a fence (query result writes) have not run yet
+    bool HasPendingOperations() const {
+        return unexecuted_operations.load(std::memory_order_acquire) != 0;
     }
 
     void SignalFence(std::function<void()>&& func, bool apply_title_delay = false) {
@@ -78,6 +85,10 @@ public:
                                           (Settings::values.title_delay_fences && apply_title_delay)
                                     : Settings::IsGPUFenceBehaviorBalanced() ||
                                           Settings::IsGPUFenceBehaviorAccurate();
+        // A fence signaled while earlier query results are still queued would let the guest see
+        // the fence before those results (Mario & Luigi: Brothership culls objects on stale
+        // occlusion counters): keep it behind them.
+        const bool keep_order = delay_fence || HasPendingOperations();
         const bool should_flush = ShouldFlush();
         if constexpr (!can_async_check) {
             TryReleasePendingFences<false>();
@@ -87,12 +98,13 @@ public:
         if constexpr (can_async_check) {
             guard.lock();
         }
-        if (delay_fence) {
+        if (keep_order) {
+            unexecuted_operations.fetch_add(1, std::memory_order_relaxed);
             uncommitted_operations.emplace_back(std::move(func));
         }
         pending_operations.emplace_back(std::move(uncommitted_operations));
         QueueFence(new_fence);
-        if (!delay_fence) {
+        if (!keep_order) {
             func();
         }
         fences.push(std::move(new_fence));
@@ -189,6 +201,7 @@ private:
             pending_operations.pop_front();
             for (auto& operation : operations) {
                 operation();
+                unexecuted_operations.fetch_sub(1, std::memory_order_release);
             }
             {
                 std::unique_lock lock(ring_guard);
@@ -223,6 +236,7 @@ private:
             PopAsyncFlushes();
             for (auto& operation : current_operations) {
                 operation();
+                unexecuted_operations.fetch_sub(1, std::memory_order_release);
             }
             {
                 std::unique_lock lock(ring_guard);
@@ -264,6 +278,7 @@ private:
     std::queue<TFence> fences;
     std::deque<std::function<void()>> uncommitted_operations;
     std::deque<std::deque<std::function<void()>>> pending_operations;
+    std::atomic<size_t> unexecuted_operations{};
 
     std::mutex guard;
     std::mutex ring_guard;

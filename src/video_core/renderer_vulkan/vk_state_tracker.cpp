@@ -81,6 +81,15 @@ Maxwell3D::DirtyState::Flags MakeInvalidationFlags() {
     return flags;
 }
 
+Maxwell3D::DirtyState::Flags MakeDynamicStateFlags() {
+    Maxwell3D::DirtyState::Flags flags = MakeInvalidationFlags();
+    flags[VertexBuffers] = false;
+    for (int index = VertexBuffer0; index <= VertexBuffer31; ++index) {
+        flags[index] = false;
+    }
+    return flags;
+}
+
 void SetupDirtyViewports(Maxwell3D::DirtyState::Tables& tables) {
     FillBlock(tables[0], OFF(viewport_transform), NUM(viewport_transform), Viewports);
     FillBlock(tables[0], OFF(viewports), NUM(viewports), Viewports);
@@ -268,6 +277,7 @@ void StateTracker::InvalidateState() {
 }
 
 StateTracker::StateTracker()
-    : flags{&default_flags}, default_flags{}, invalidation_flags{MakeInvalidationFlags()} {}
+    : flags{&default_flags}, default_flags{}, invalidation_flags{MakeInvalidationFlags()},
+      dynamic_state_flags{MakeDynamicStateFlags()} {}
 
 } // namespace Vulkan

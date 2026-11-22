@@ -262,7 +262,7 @@ void RasterizerVulkan::PrepareDraw(bool is_indexed, Func&& draw_func) {
     if (!pipeline->Configure(is_indexed))
         return;
 
-    UpdateDynamicStates();
+    UpdateDynamicStates(pipeline);
 
     query_cache.NotifySegment(true);
     HandleTransformFeedback();
@@ -460,7 +460,7 @@ void RasterizerVulkan::DrawTexture() {
     texture_cache.SynchronizeDescriptors(false);
     texture_cache.UpdateRenderTargets(false);
 
-    UpdateDynamicStates();
+    UpdateDynamicStates(nullptr);
 
     query_cache.NotifySegment(true);
     query_cache.CounterEnable(VideoCommon::QueryType::ZPassPixelCount64, maxwell3d->regs.zpass_pixel_count_enable);
@@ -1198,9 +1198,16 @@ bool AccelerateDMA::BufferToImage(const Tegra::DMA::ImageCopy& copy_info,
     return DmaBufferImageCopy<true>(copy_info, buffer_operand, image_operand);
 }
 
-void RasterizerVulkan::UpdateDynamicStates() {
+void RasterizerVulkan::UpdateDynamicStates(GraphicsPipeline* gp) {
     auto& regs = maxwell3d->regs;
     auto& flags = maxwell3d->dirty.flags;
+    // Qualcomm's driver can lose dynamic state when another pipeline is bound (black scene after
+    // Smash's KO post passes, black sky and characters in Brothership): set it all again on each
+    // pipeline change.
+    if (device.GetDriverID() == VK_DRIVER_ID_QUALCOMM_PROPRIETARY && gp != dynamic_state_pipeline) {
+        dynamic_state_pipeline = gp;
+        state_tracker.InvalidateDynamicStates();
+    }
     const auto topology = maxwell3d->draw_manager.draw_state.topology;
     const bool topology_changed = state_tracker.ChangePrimitiveTopology(topology);
     if (topology_changed) {
@@ -1276,14 +1283,7 @@ void RasterizerVulkan::UpdateDynamicStates() {
     }
 
     if (device.IsExtVertexInputDynamicStateSupported()) {
-        if (auto* gp = pipeline_cache.CurrentGraphicsPipeline(); gp && gp->HasDynamicVertexInput()) {
-            // Qualcomm's driver can lose the dynamic vertex input when another pipeline is bound
-            // (black scene after Smash's KO post passes): set it again on each pipeline change.
-            if (device.GetDriverID() == VK_DRIVER_ID_QUALCOMM_PROPRIETARY &&
-                gp != vertex_input_pipeline) {
-                vertex_input_pipeline = gp;
-                maxwell3d->dirty.flags[Dirty::VertexInput] = true;
-            }
+        if (gp && gp->HasDynamicVertexInput()) {
             UpdateVertexInput(regs);
         } else if (gp) {
             // A static vertex input pipeline invalidates the dynamic one: set it again on the

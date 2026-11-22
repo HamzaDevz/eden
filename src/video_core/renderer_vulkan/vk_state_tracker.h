@@ -89,6 +89,13 @@ public:
         stencil_reset = true;
     }
 
+    /// Marks the dynamic state for update again, leaving vertex buffer bindings alone
+    void InvalidateDynamicStates() {
+        (*flags) |= dynamic_state_flags;
+        current_topology = INVALID_TOPOLOGY;
+        stencil_reset = true;
+    }
+
     void InvalidateViewports() {
         (*flags)[Dirty::Viewports] = true;
     }
@@ -310,6 +317,7 @@ private:
     Tegra::Engines::Maxwell3D::DirtyState::Flags* flags;
     Tegra::Engines::Maxwell3D::DirtyState::Flags default_flags;
     Tegra::Engines::Maxwell3D::DirtyState::Flags invalidation_flags;
+    Tegra::Engines::Maxwell3D::DirtyState::Flags dynamic_state_flags;
     Maxwell::PrimitiveTopology current_topology = INVALID_TOPOLOGY;
     bool two_sided_stencil = false;
     StencilProperties front{};

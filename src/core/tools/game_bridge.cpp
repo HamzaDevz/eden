@@ -39,7 +39,9 @@
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
+#include <format>
 #include <istream>
+#include <iterator>
 #include <map>
 #include <mutex>
 #include <optional>
@@ -49,7 +51,6 @@
 #include <vector>
 
 #include <boost/asio.hpp>
-#include <fmt/format.h>
 
 #include "common/logging.h"
 #include "common/thread.h"
@@ -282,14 +283,14 @@ private:
     void EndStep() {
         if (step_height == 0) {
             Pause();
-            Send(fmt::format("ok step {}\n", frame.load()));
+            Send(std::format("ok step {}\n", frame.load()));
             return;
         }
         try {
             RequestShot(step_height, true);
         } catch (const std::exception& e) {
             Pause();
-            Send(fmt::format("err step {}\n", e.what()));
+            Send(std::format("err step {}\n", e.what()));
         }
     }
 
@@ -325,7 +326,7 @@ private:
         try {
             HandleCommand(args);
         } catch (const std::exception& e) {
-            Send(fmt::format("err {} {}\n", args[0], e.what()));
+            Send(std::format("err {} {}\n", args[0], e.what()));
         }
     }
 
@@ -402,7 +403,7 @@ private:
         } else if (command == "pause" && args.size() == 1) {
             step_until = 0;
             Pause();
-            Send(fmt::format("ok pause {}\n", frame.load()));
+            Send(std::format("ok pause {}\n", frame.load()));
         } else if (command == "resume" && args.size() == 1) {
             step_until = 0;
             Resume();
@@ -421,15 +422,15 @@ private:
             if (length == 0 || length > MaxRead) {
                 throw std::invalid_argument("length");
             }
-            std::string reply = fmt::format("mem {:x} ", address);
+            std::string reply = std::format("mem {:x} ", address);
             AppendRead(reply, address, length);
             Send(reply + '\n');
         } else if (command == "sym" && args.size() == 2) {
             LoadSymbols();
             const auto it = symbols.find(args[1]);
             Send(it == symbols.end()
-                     ? fmt::format("sym {} -\n", args[1])
-                     : fmt::format("sym {} {:x} {:x}\n", args[1], it->second.first,
+                     ? std::format("sym {} -\n", args[1])
+                     : std::format("sym {} {:x} {:x}\n", args[1], it->second.first,
                                    it->second.second));
         } else if (command == "badge" && args.size() == 3 && args[2] == "-") {
             std::scoped_lock lock{badges_mutex};
@@ -441,7 +442,7 @@ private:
             Send("ok badge\n");
         } else if (command == "badge" && args.size() >= 7 && args.size() <= 9 &&
                    (args.size() < 9 || args[8] == "row")) {
-            const auto line = fmt::format("{} {} {} {} {} {} {}{}", args[1], ParseU64(args[2]),
+            const auto line = std::format("{} {} {} {} {} {} {}{}", args[1], ParseU64(args[2]),
                                           ParseU64(args[3]), ParseU64(args[4]), ParseS64(args[5]),
                                           ParseS64(args[6]), args.size() >= 8 ? args[7] : "",
                                           args.size() == 9 ? " row" : "");
@@ -449,14 +450,14 @@ private:
             badges[args[1]] = {line, std::chrono::steady_clock::now() + BadgeLife};
             Send("ok badge\n");
         } else if (command == "info") {
-            std::string reply = fmt::format("info {:016x} ", system.GetApplicationProcessProgramID());
+            std::string reply = std::format("info {:016x} ", system.GetApplicationProcessProgramID());
             for (const u8 byte : system.GetApplicationProcessBuildID()) {
-                fmt::format_to(std::back_inserter(reply), "{:02x}", byte);
+                std::format_to(std::back_inserter(reply), "{:02x}", byte);
             }
             const auto main = MainBase();
-            reply += main ? fmt::format(" main={:x}", *main) : " main=-";
+            reply += main ? std::format(" main={:x}", *main) : " main=-";
             for (const auto& [base, name] : Modules()) {
-                fmt::format_to(std::back_inserter(reply), " {}@{:x}", name, base);
+                std::format_to(std::back_inserter(reply), " {}@{:x}", name, base);
             }
             Send(reply + '\n');
         } else {
@@ -483,7 +484,7 @@ private:
                         Pause();
                     }
                     const std::size_t row = std::size_t{width} * 4;
-                    std::string reply = fmt::format("shot {} {} ", width, height);
+                    std::string reply = std::format("shot {} {} ", width, height);
                     reply.reserve(reply.size() + shot_data.size() * 2 + 1);
                     for (u64 y = 0; y < height; ++y) {
                         const auto src = invert_y ? height - 1 - y : y;
@@ -520,7 +521,7 @@ private:
         if (!session || !streaming) {
             return;
         }
-        std::string line = fmt::format("f {} {}", frame.load(),
+        std::string line = std::format("f {} {}", frame.load(),
                                        system.CoreTiming().GetGlobalTimeUs().count());
         auto& hid = system.HIDCore();
         for (std::size_t i = 0; i < NumPads; ++i) {
@@ -529,7 +530,7 @@ private:
                 continue;
             }
             const auto sticks = controller->GetSticks();
-            fmt::format_to(std::back_inserter(line), " p {} {:x} {} {} {} {}", i,
+            std::format_to(std::back_inserter(line), " p {} {:x} {} {} {} {}", i,
                            static_cast<u64>(controller->GetNpadButtons().raw), sticks.left.x,
                            sticks.left.y, sticks.right.x, sticks.right.y);
         }

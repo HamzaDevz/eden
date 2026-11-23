@@ -1,0 +1,53 @@
+# SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+# regress_input.py press <buttons hex> <wait s> | <mode> <seconds> : player 1 inputs for regress.sh, by the game bridge.
+#   roam            walks in 8 directions (1.5 s each) and presses A every 0.7 s
+#   brothership_cut from the 1.0.1 save by the stairs: into the "Nya nyaaah" dialog, clears it, climbs the stairs,
+#                   then A every 0.8 s through the cutscene (the black-object hotspot)
+import os, sys, time
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import bridge
+
+TICK = 0.05
+DIRS = [(1, 0), (0, -1), (-1, 0), (0, 1), (1, -1), (-1, 1), (1, 1), (-1, -1)]
+
+
+def roam(t, j):
+    x, y = DIRS[int(t / 1.5) % len(DIRS)]
+    return (0x1 if j % 14 == 0 else 0), int(x * 32767), int(y * 32767)
+
+
+CUT = [(2, 0, 32767), (10, 8, 0), (20, 0, 32767)]  # (until s, A period in ticks or 0, stick y; +y = up)
+
+
+def brothership_cut(t, j):
+    per, y = next(((p, yy) for e, p, yy in CUT if t < e), (16, 0))
+    return (0x1 if per and j % per == 0 else 0), 0, y
+
+
+def main():
+    b = bridge.Bridge()
+    if sys.argv[1] == "press":
+        b.pad(0, int(sys.argv[2], 16))
+        time.sleep(0.15)
+        b.pad(0)
+        time.sleep(float(sys.argv[3]))
+        b.release(0)
+        return
+    f = {"roam": roam, "brothership_cut": brothership_cut}[sys.argv[1]]
+    start = time.time(); end = start + float(sys.argv[2]); j = 0
+    while time.time() < end:
+        j += 1
+        btn, x, y = f(time.time() - start, j)
+        try:
+            b.pad(0, btn, x, y)
+        except OSError:
+            time.sleep(0.3); b = bridge.Bridge()
+        time.sleep(TICK)
+    b.pad(0)
+    b.release(0)
+
+
+if __name__ == "__main__":
+    main()

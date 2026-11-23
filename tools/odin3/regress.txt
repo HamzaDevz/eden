@@ -1,0 +1,14 @@
+# regress.sh game list, one line per game:
+#   TITLE|ROM file in the SD card's Switch folder|boot wait s|presses before recording|input while recording
+# presses: "buttons@seconds" pressed 150 ms then waited (bridge.py bits: a=1 b=2 l=40 r=80 plus=400 minus=800);
+# input: a mode of regress_input.py (roam, brothership_cut)
+01006D0017F7A000|Mario and Luigi Brothership [01006D0017F7A000][v0][US].nsp|40|400@4 400@4 1@4 1@8|brothership_cut
+010015100B514000|Super Mario Bros. Wonder[010015100B514000][1.0.0][0][16.0.3].nsp|60|c0@3 1@3 1@3 1@3 1@3 1@8|roam
+0100FD8022DAA000|Super Mario Galaxy 2 [0100FD8022DAA000][v0].NSP|60|1@3 1@3 1@3 1@8|roam
+0100BC0018138000|Super Mario RPG [0100BC0018138000][v0].nsp|85|1@3 1@20|roam
+010048701995E000|Luigi's Mansion 2 HD [010048701995E000][v0].nsp|60|1@3 1@3 1@3 1@8|roam
+01006A800016E000|Super Smash Bros Ultimate.xci|60|1@4 1@4 1@4|roam
+01008CF01BAAC000|The Legend Of Zelda Echoes Of Wisdom.xci|60|1@3 1@3 1@3 1@8|roam
+010013C00E930000|Hollow Knight Silksong [010013C00E930000][v0][Base].nsp|60|1@3 1@3 1@3 1@8|roam
+0100B99019412000|Mario vs. Donkey Kong v1.0.0 [0100B99019412000][v0][APP].nsp|60|1@3 1@3 1@3 1@8|roam
+0100965017338000|Super Mario Party Jamboree v1.0.0[0100965017338000][0][APP].nsp|60|1@3 1@3 1@3 1@8|roam

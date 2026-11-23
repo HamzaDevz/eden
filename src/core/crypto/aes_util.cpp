@@ -4,6 +4,7 @@
 // SPDX-FileCopyrightText: Copyright 2018 yuzu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <algorithm>
 #include <array>
 #include <cstring>
 #include <openssl/err.h>
@@ -13,10 +14,103 @@
 #include "core/crypto/aes_util.h"
 #include "core/crypto/key_manager.h"
 
+// The bundled OpenSSL is built without assembly, so its AES runs as table C code (~350 MB/s on the Odin 3).
+// Game data reads go through AES-128-CTR, so it is done here with the ARMv8 crypto extension instead (~4 GB/s).
+#if defined(__aarch64__) && defined(__linux__) && defined(__clang__)
+#define EDEN_AES_ARMV8_CTR
+#include <arm_neon.h>
+#include <asm/hwcap.h>
+#include <sys/auxv.h>
+#endif
+
 namespace Core::Crypto {
 namespace {
 using NintendoTweak = std::array<u8, 16>;
 constexpr std::size_t AesBlockBytes = 16;
+
+#ifdef EDEN_AES_ARMV8_CTR
+using RoundKeys = std::array<std::array<u8, 16>, 11>;
+
+// AESE with a zero round key is ShiftRows(SubBytes(x)); with the same word in every column ShiftRows is a no-op
+__attribute__((target("aes"))) u32 SubWord(u32 w) {
+    const uint8x16_t s = vaeseq_u8(vreinterpretq_u8_u32(vdupq_n_u32(w)), vdupq_n_u8(0));
+    return vgetq_lane_u32(vreinterpretq_u32_u8(s), 0);
+}
+
+__attribute__((target("aes"))) RoundKeys ExpandKey128(const u8* key) {
+    std::array<u32, 44> w;
+    std::memcpy(w.data(), key, 16);
+    u8 rcon = 1;
+    for (std::size_t i = 4; i < w.size(); ++i) {
+        u32 t = w[i - 1];
+        if (i % 4 == 0) {
+            t = SubWord(t);
+            t = ((t >> 8) | (t << 24)) ^ rcon;
+            rcon = static_cast<u8>((rcon << 1) ^ ((rcon & 0x80) ? 0x1b : 0));
+        }
+        w[i] = w[i - 4] ^ t;
+    }
+    RoundKeys out;
+    std::memcpy(out.data(), w.data(), sizeof(w));
+    return out;
+}
+
+__attribute__((target("aes"))) inline uint8x16_t EncryptBlock(const uint8x16_t* rk, uint8x16_t s) {
+    for (std::size_t r = 0; r < 9; ++r) {
+        s = vaesmcq_u8(vaeseq_u8(s, rk[r]));
+    }
+    return veorq_u8(vaeseq_u8(s, rk[9]), rk[10]);
+}
+
+// Same output as OpenSSL's AES-128-CTR: 128-bit big-endian counter, a trailing partial block consumes a whole one
+__attribute__((target("aes"))) void Armv8Ctr(const RoundKeys& keys, std::array<u8, 16>& counter, const u8* src,
+                                             std::size_t size, u8* dest) {
+    uint8x16_t rk[11];
+    for (std::size_t i = 0; i < 11; ++i) {
+        rk[i] = vld1q_u8(keys[i].data());
+    }
+    u64 hi, lo;
+    std::memcpy(&hi, counter.data(), 8);
+    std::memcpy(&lo, counter.data() + 8, 8);
+    hi = __builtin_bswap64(hi);
+    lo = __builtin_bswap64(lo);
+    const auto next = [&] {
+        const u64 be[2] = {__builtin_bswap64(hi), __builtin_bswap64(lo)};
+        if (++lo == 0) {
+            ++hi;
+        }
+        return vld1q_u8(reinterpret_cast<const u8*>(be));
+    };
+    std::size_t off = 0;
+    for (; off + 64 <= size; off += 64) {
+        uint8x16_t s0 = next(), s1 = next(), s2 = next(), s3 = next();
+        for (std::size_t r = 0; r < 9; ++r) {
+            s0 = vaesmcq_u8(vaeseq_u8(s0, rk[r]));
+            s1 = vaesmcq_u8(vaeseq_u8(s1, rk[r]));
+            s2 = vaesmcq_u8(vaeseq_u8(s2, rk[r]));
+            s3 = vaesmcq_u8(vaeseq_u8(s3, rk[r]));
+        }
+        s0 = veorq_u8(vaeseq_u8(s0, rk[9]), rk[10]);
+        s1 = veorq_u8(vaeseq_u8(s1, rk[9]), rk[10]);
+        s2 = veorq_u8(vaeseq_u8(s2, rk[9]), rk[10]);
+        s3 = veorq_u8(vaeseq_u8(s3, rk[9]), rk[10]);
+        vst1q_u8(dest + off, veorq_u8(vld1q_u8(src + off), s0));
+        vst1q_u8(dest + off + 16, veorq_u8(vld1q_u8(src + off + 16), s1));
+        vst1q_u8(dest + off + 32, veorq_u8(vld1q_u8(src + off + 32), s2));
+        vst1q_u8(dest + off + 48, veorq_u8(vld1q_u8(src + off + 48), s3));
+    }
+    for (; off < size; off += AesBlockBytes) {
+        std::array<u8, AesBlockBytes> ks;
+        vst1q_u8(ks.data(), EncryptBlock(rk, next()));
+        const std::size_t n = std::min(AesBlockBytes, size - off);
+        for (std::size_t i = 0; i < n; ++i) {
+            dest[off + i] = src[off + i] ^ ks[i];
+        }
+    }
+    const u64 be[2] = {__builtin_bswap64(hi), __builtin_bswap64(lo)};
+    std::memcpy(counter.data(), be, sizeof(be));
+}
+#endif
 
 NintendoTweak CalculateNintendoTweak(std::size_t sector_id) {
     NintendoTweak out{};
@@ -33,6 +127,13 @@ struct CipherContext {
     EVP_CIPHER_CTX* encryption_context = nullptr;
     EVP_CIPHER_CTX* decryption_context = nullptr;
     EVP_CIPHER* cipher = nullptr;
+#ifdef EDEN_AES_ARMV8_CTR
+    bool armv8_ctr = false;
+    RoundKeys round_keys{};
+    // OpenSSL keeps a running counter per context across Transcode calls; mirror that
+    std::array<u8, 16> encryption_counter{};
+    std::array<u8, 16> decryption_counter{};
+#endif
 };
 
 static inline const std::string GetCipherName(Mode mode, u32 key_size) {
@@ -99,6 +200,15 @@ Crypto::AESCipher<Key>::AESCipher(Key key, Mode mode) : ctx(std::make_unique<Cip
 
     EVP_CIPHER_CTX_set_padding(ctx->encryption_context, 0);
     EVP_CIPHER_CTX_set_padding(ctx->decryption_context, 0);
+
+#ifdef EDEN_AES_ARMV8_CTR
+    if constexpr (sizeof(Key) == 16) {
+        if (mode == Mode::CTR && (getauxval(AT_HWCAP) & HWCAP_AES) != 0) {
+            ctx->round_keys = ExpandKey128(key.data());
+            ctx->armv8_ctr = true;
+        }
+    }
+#endif
 }
 
 template <typename Key>
@@ -110,10 +220,18 @@ AESCipher<Key>::~AESCipher() {
 
 template <typename Key>
 void AESCipher<Key>::Transcode(const u8* src, std::size_t size, u8* dest, Op op) const {
-    auto* const context = op == Op::Encrypt ? ctx->encryption_context : ctx->decryption_context;
-
     if (size == 0)
         return;
+
+#ifdef EDEN_AES_ARMV8_CTR
+    if (ctx->armv8_ctr) {
+        Armv8Ctr(ctx->round_keys, op == Op::Encrypt ? ctx->encryption_counter : ctx->decryption_counter, src,
+                 size, dest);
+        return;
+    }
+#endif
+
+    auto* const context = op == Op::Encrypt ? ctx->encryption_context : ctx->decryption_context;
 
     // reset
     ASSERT(EVP_CipherInit_ex(context, nullptr, nullptr, nullptr, nullptr, -1));
@@ -164,6 +282,14 @@ void AESCipher<Key>::XTSTranscode(const u8* src, std::size_t size, u8* dest, std
 
 template <typename Key>
 void AESCipher<Key>::SetIV(std::span<const u8> data) {
+#ifdef EDEN_AES_ARMV8_CTR
+    if (ctx->armv8_ctr) {
+        ASSERT(data.size() == ctx->encryption_counter.size());
+        std::memcpy(ctx->encryption_counter.data(), data.data(), data.size());
+        std::memcpy(ctx->decryption_counter.data(), data.data(), data.size());
+        return;
+    }
+#endif
     const int ret_enc = EVP_CipherInit_ex(ctx->encryption_context, nullptr, nullptr, nullptr, data.data(), -1);
     const int ret_dec = EVP_CipherInit_ex(ctx->decryption_context, nullptr, nullptr, nullptr, data.data(), -1);
     ASSERT(ret_enc == 1 && ret_dec == 1 && "Failed to set IV on OpenSSL contexts");

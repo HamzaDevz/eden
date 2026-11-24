@@ -46,7 +46,8 @@ enum class GPUVendor {
 enum class TitleID : std::uint64_t {
     NinjaGaidenRagebound = 0x0100781020710000ULL,
     ZeldaEchoesOfWisdom = 0x01008CF01BAAC000ULL,
-    SuperSmashBrosUltimate = 0x01006A800016E000ULL
+    SuperSmashBrosUltimate = 0x01006A800016E000ULL,
+    MarioLuigiBrothership = 0x01006D0017F7A000ULL
 };
 
 struct EnvironmentInfo {

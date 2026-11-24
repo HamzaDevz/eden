@@ -138,6 +138,11 @@ void LoadOverrides(std::uint64_t program_id, const VideoCore::RendererBase& rend
             // Delay host syncpoints and forced drains while keeping Low's query reports immediate.
             Settings::values.title_delay_fences = true;
             break;
+        case TitleID::MarioLuigiBrothership:
+            // With Low's immediate host syncpoints some cutscenes turn overexposed until a restart
+            // (landing on Foljungle); delaying them as High does keeps the image right.
+            Settings::values.title_delay_fences = true;
+            break;
         default:
             break;
     }

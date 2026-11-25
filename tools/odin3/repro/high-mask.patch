@@ -1,0 +1,172 @@
+Build de test seulement (jamais livré) : chaque mécanisme du mode GPU High devient un bit de la propriété Android
+debug.eden.hi, lue à chaque appel, pour bissecter un bug « High le corrige » sans recompiler entre deux essais.
+  adb shell setprop debug.eden.hi 0x61   (puis relancer le jeu ; 0 = Low pur, 0x1ff = tout High)
+bit 0 fence_manager      syncpoints et fences différés (= title_delay_fences)
+bit 1 maxwell_3d         RefreshParameters (relecture des paramètres de draw)
+bit 2 vk_rasterizer      MustFlushRegion côté High
+bit 3 vk_rasterizer      FlushRegion dans FlushAndInvalidateRegion
+bit 4 gpu_thread         FlushAndInvalidateRegion synchrone
+bit 5 query_cache        requêtes non synchronisées d'office (is_synced)
+bit 6 query_cache        sémaphores Payload différés
+bit 7 vk_query_cache     requêtes précises
+bit 8 dma_pusher         lectures DMA sûres
+Brothership 24/11 : 0x61 corrige la surexposition ; les syncpoints différés seuls (title_delay_fences, f4f589526e) suffisent, 3 sur 3. Application : git apply.
+
+diff --git a/src/common/settings.cpp b/src/common/settings.cpp
+index b27918ba0e..a1a1f95bfe 100644
+--- a/src/common/settings.cpp
++++ b/src/common/settings.cpp
+@@ -7,6 +7,7 @@
+ #include <version>
+ #if __cpp_lib_chrono >= 201907L
+ #include <chrono>
++#include <cstdlib>
+ #include <exception>
+ #include <stdexcept>
+ #endif
+@@ -155,6 +156,24 @@ bool IsGPULevelHigh() {
+     return values.current_gpu_accuracy == GpuAccuracy::High;
+ }
+ 
++#ifdef __ANDROID__
++#include <sys/system_properties.h>
++#endif
++bool HiBit(int bit) {
++    static const unsigned mask = [] {
++        unsigned m = 0;
++#ifdef __ANDROID__
++        char buf[PROP_VALUE_MAX]{};
++        if (__system_property_get("debug.eden.hi", buf) > 0) {
++            m = static_cast<unsigned>(std::strtoul(buf, nullptr, 0));
++        }
++#endif
++        LOG_WARNING(Common, "HiBit mask {:#x}", m);
++        return m;
++    }();
++    return IsGPULevelHigh() || ((mask >> bit) & 1);
++}
++
+ bool IsDMALevelDefault() {
+     return values.dma_accuracy.GetValue() == DmaAccuracy::Default;
+ }
+diff --git a/src/common/settings.h b/src/common/settings.h
+index ea40c51c10..9a11e419ae 100644
+--- a/src/common/settings.h
++++ b/src/common/settings.h
+@@ -1035,6 +1035,7 @@ bool GetDebugKnobAt(u8 i);
+ 
+ void UpdateGPUAccuracy();
+ bool IsGPULevelHigh();
++bool HiBit(int bit);
+ 
+ bool IsDMALevelDefault();
+ bool IsDMALevelSafe();
+diff --git a/src/video_core/dma_pusher.cpp b/src/video_core/dma_pusher.cpp
+index bea99b51be..a8ddf4b17e 100644
+--- a/src/video_core/dma_pusher.cpp
++++ b/src/video_core/dma_pusher.cpp
+@@ -83,7 +83,7 @@ bool DmaPusher::Step() {
+                 subchannels[dma_state.subchannel]->current_dirty = memory_manager.IsMemoryDirty(dma_state.dma_get, words * sizeof(u32));
+             }
+         }
+-        const bool use_safe = Settings::IsDMALevelDefault() ? Settings::IsGPULevelHigh() && !Settings::values.title_unsafe_dma
++        const bool use_safe = Settings::IsDMALevelDefault() ? Settings::HiBit(8) && !Settings::values.title_unsafe_dma
+                                                          : Settings::IsDMALevelSafe();
+         if (use_safe) {
+             Tegra::Memory::GpuGuestMemory<Tegra::CommandHeader, Tegra::Memory::GuestMemoryFlags::SafeRead>headers(memory_manager, dma_state.dma_get, header.size, &command_headers);
+diff --git a/src/video_core/engines/maxwell_3d.cpp b/src/video_core/engines/maxwell_3d.cpp
+index e7da9d9138..b55d63b452 100644
+--- a/src/video_core/engines/maxwell_3d.cpp
++++ b/src/video_core/engines/maxwell_3d.cpp
+@@ -223,7 +223,7 @@ void Maxwell3D::ProcessMacro(Core::System& system, u32 method, const u32* base_s
+ }
+ 
+ void Maxwell3D::RefreshParametersImpl() {
+-    if (!Settings::IsGPULevelHigh()) {
++    if (!Settings::HiBit(1)) {
+         return;
+     }
+     size_t current_index = 0;
+diff --git a/src/video_core/fence_manager.h b/src/video_core/fence_manager.h
+index 63f76f792f..90d0a3d923 100644
+--- a/src/video_core/fence_manager.h
++++ b/src/video_core/fence_manager.h
+@@ -74,7 +74,7 @@ public:
+ 
+     void SignalFence(std::function<void()>&& func, bool apply_title_delay = false) {
+         const bool delay_fence = Settings::IsGPUFenceBehaviorDefault()
+-                                    ? Settings::IsGPULevelHigh() ||
++                                    ? Settings::HiBit(0) ||
+                                           (Settings::values.title_delay_fences && apply_title_delay)
+                                     : Settings::IsGPUFenceBehaviorBalanced() ||
+                                           Settings::IsGPUFenceBehaviorAccurate();
+diff --git a/src/video_core/gpu_thread.cpp b/src/video_core/gpu_thread.cpp
+index 9fd3511449..9427659172 100644
+--- a/src/video_core/gpu_thread.cpp
++++ b/src/video_core/gpu_thread.cpp
+@@ -84,7 +84,7 @@ void ThreadManager::InvalidateRegion(DAddr addr, u64 size) {
+ }
+ 
+ void ThreadManager::FlushAndInvalidateRegion(DAddr addr, u64 size, bool is_async) {
+-    if (Settings::IsGPULevelHigh()) {
++    if (Settings::HiBit(4)) {
+         if (!is_async) {
+             PushCommand(FlushRegionCommand(addr, size), false, is_async);
+         } else {
+diff --git a/src/video_core/query_cache/query_cache.h b/src/video_core/query_cache/query_cache.h
+index b8c1bc4f45..0c0f93e00d 100644
+--- a/src/video_core/query_cache/query_cache.h
++++ b/src/video_core/query_cache/query_cache.h
+@@ -260,7 +260,7 @@ void QueryCacheBase<Traits>::CounterReport(GPUVAddr addr, QueryType counter_type
+     };
+     u8* pointer = impl->device_memory.template GetPointer<u8>(cpu_addr);
+     u8* pointer_timestamp = impl->device_memory.template GetPointer<u8>(cpu_addr + 8);
+-    bool is_synced = (Settings::IsGPUFenceBehaviorDefault() ? !Settings::IsGPULevelHigh() : !Settings::IsGPUFenceBehaviorBalanced() && !Settings::IsGPUFenceBehaviorAccurate()) && is_fence;
++    bool is_synced = (Settings::IsGPUFenceBehaviorDefault() ? !Settings::HiBit(5) : !Settings::IsGPUFenceBehaviorBalanced() && !Settings::IsGPUFenceBehaviorAccurate()) && is_fence;
+     std::function<void()> operation([this, is_synced, streamer, query_base = query, query_location,
+                                      pointer, pointer_timestamp] {
+         if (True(query_base->flags & QueryFlagBits::IsInvalidated)) {
+@@ -294,7 +294,7 @@ void QueryCacheBase<Traits>::CounterReport(GPUVAddr addr, QueryType counter_type
+     if (is_fence) {
+         impl->rasterizer.SignalFence(std::move(operation));
+     } else {
+-        if (!Settings::IsGPULevelHigh() && counter_type == QueryType::Payload) {
++        if (!Settings::HiBit(6) && counter_type == QueryType::Payload) {
+             if (has_timestamp) {
+                 u64 timestamp = impl->gpu.GetTicks();
+                 u64 value = static_cast<u64>(payload);
+diff --git a/src/video_core/renderer_vulkan/vk_query_cache.cpp b/src/video_core/renderer_vulkan/vk_query_cache.cpp
+index f63c924e39..605128c9a6 100644
+--- a/src/video_core/renderer_vulkan/vk_query_cache.cpp
++++ b/src/video_core/renderer_vulkan/vk_query_cache.cpp
+@@ -174,7 +174,7 @@ public:
+ 
+         scheduler.Record([query_pool = current_query_pool,
+                                  query_index = current_bank_slot](vk::CommandBuffer cmdbuf) {
+-            const bool use_precise = Settings::IsGPULevelHigh();
++            const bool use_precise = Settings::HiBit(7);
+             cmdbuf.BeginQuery(query_pool, static_cast<u32>(query_index),
+                               use_precise ? VK_QUERY_CONTROL_PRECISE_BIT : 0);
+         });
+diff --git a/src/video_core/renderer_vulkan/vk_rasterizer.cpp b/src/video_core/renderer_vulkan/vk_rasterizer.cpp
+index bcb13994a1..f8d8d7ce36 100644
+--- a/src/video_core/renderer_vulkan/vk_rasterizer.cpp
++++ b/src/video_core/renderer_vulkan/vk_rasterizer.cpp
+@@ -833,7 +833,7 @@ bool RasterizerVulkan::MustFlushRegion(DAddr addr, u64 size, VideoCommon::CacheT
+             return true;
+         }
+     }
+-    if (!Settings::IsGPULevelHigh()) {
++    if (!Settings::HiBit(2)) {
+         return false;
+     }
+     if (True(which & VideoCommon::CacheType::TextureCache)) {
+@@ -978,7 +978,7 @@ void RasterizerVulkan::ReleaseFences(bool force) {
+ 
+ void RasterizerVulkan::FlushAndInvalidateRegion(DAddr addr, u64 size,
+                                                 VideoCommon::CacheType which) {
+-    if (Settings::IsGPULevelHigh()) {
++    if (Settings::HiBit(3)) {
+         FlushRegion(addr, size, which);
+     }
+     InvalidateRegion(addr, size, which);

@@ -32,9 +32,9 @@ $A logcat -c
 $A shell am start -a android.intent.action.VIEW -t application/octet-stream -d "\"$U\"" -n $PKG/org.yuzu.yuzu_emu.activities.EmulationActivity >/dev/null
 $A forward tcp:6560 tcp:6560 >/dev/null
 sleep 40
-# A until the field hint shows (checked every 5th press after 150 s), at most 300 s
+# A until the field hint shows (checked every 5th press after 150 s), at most 360 s
 t0=$SECONDS; i=0; field=0
-while [ $((SECONDS - t0)) -lt 300 ]; do
+while [ $((SECONDS - t0)) -lt 360 ]; do
   python3 $T/bridge.py pad 0 1 0 0 0 0 120 >/dev/null; python3 $T/bridge.py pad 0 0 0 0 0 0 50 >/dev/null; sleep 1.1
   i=$((i + 1))
   if [ $((SECONDS - t0)) -gt 150 ] && [ $((i % 5)) -eq 0 ]; then

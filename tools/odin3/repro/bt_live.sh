@@ -1,5 +1,5 @@
 #!/bin/zsh
-# bt_live.sh RUN prep|measure|restore : new game (Hamza's save renamed away like regress.sh), A until the beach field, route.sh +
+# bt_live.sh RUN prep|measure|restore (NOROUTE=1 prep + ROUTE=1 measure: battle start inside the window) : new game (Hamza's save renamed away like regress.sh), A until the beach field, route.sh +
 # recover.sh to the first battle, then 120 s of TV capture + SurfaceFlinger while mashing A; save put back and checked.
 export PATH=$HOME/Library/Android/sdk/platform-tools:$PATH
 A=adb; D=${0:A:h}; T=~/PhpstormProjects/eden/tools/odin3
@@ -51,7 +51,8 @@ if [ $2 = measure ]; then
   DISP=$($A shell dumpsys SurfaceFlinger --display-id | tr -d '\r' | grep -v 'pnpId=QCM' | sed -n 's/^Display \([0-9]*\).*/\1/p' | head -1)
   L=$($A shell "dumpsys SurfaceFlinger --list" | tr -d '\r' | grep -oE 'SurfaceView\[[^]]*EmulationActivity\]\(BLAST\)#[0-9]+' | head -1)
   $A shell "screenrecord ${DISP:+--display-id $DISP} --time-limit 122 --size 1920x1080 --bit-rate 20000000 /data/local/tmp/regress.mp4" &
-  python3 $T/regress_input.py mash 120 &
+  # ROUTE=1 (after a NOROUTE=1 prep) walks into the battle inside the window, so its start is measured
+  if [ -n "$ROUTE" ]; then ( zsh $D/route.sh; python3 $T/regress_input.py mash 90 ) & else python3 $T/regress_input.py mash 120 & fi
   t1=$SECONDS
   while [ $((SECONDS - t1)) -lt 120 ]; do echo @; $A shell "dumpsys SurfaceFlinger --latency '$L'"; sleep 1; done > $OUT/sf.txt
   wait

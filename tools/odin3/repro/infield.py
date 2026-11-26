@@ -14,4 +14,4 @@ b = sum(v > 190 for v in bright) / len(bright)
 o = sum(v < 130 for v in outline) / len(outline)
 if len(sys.argv) > 2:
     print(round(b, 2), round(o, 2), len(outline))
-sys.exit(0 if b > 0.8 and o > 0.7 else 1)
+sys.exit(0 if b > 0.45 and o > 0.7 else 1)  # b 0.6 in docked + SMAA (thinner glyphs), <= 0.1 off field

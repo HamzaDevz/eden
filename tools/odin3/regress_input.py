@@ -7,6 +7,7 @@
 #   mash            A every 1.3 s, stick at rest (menus, dialogs, battles)
 #   brothership_cut from the 1.0.1 save by the stairs: into the "Nya nyaaah" dialog, clears it, climbs the stairs,
 #                   then A every 0.8 s through the cutscene (the black-object hotspot)
+#   silksong        Silksong new game in Moss Grotto: A pulls the needle 10 s, left jumping and attacking until 52 s, then back right
 import math, os, sys, time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import bridge
@@ -37,6 +38,14 @@ def brothership_cut(t, j):
     return (0x1 if per and j % per == 0 else 0), 0, y
 
 
+def silksong(t, j):
+    # new game, Moss Grotto: A pulls the needle, left until 52 s (next room, moss creeps, a pit), then back right;
+    # B jumps, Y attacks
+    if t < 10:
+        return (0x1 if j % 10 < 3 else 0), 0, 0
+    return (0x2 if j % 20 < 8 else 0) | (0x8 if j % 10 == 5 else 0), (-32767 if t < 52 else 32767), 0
+
+
 def main():
     b = bridge.Bridge()
     if sys.argv[1] == "press":
@@ -46,7 +55,8 @@ def main():
         time.sleep(float(sys.argv[3]))
         b.release(0)
         return
-    f = {"roam": roam, "circle": circle, "mash": mash, "brothership_cut": brothership_cut}[sys.argv[1]]
+    f = {"roam": roam, "circle": circle, "mash": mash, "brothership_cut": brothership_cut,
+         "silksong": silksong}[sys.argv[1]]
     start = time.time(); end = start + float(sys.argv[2]); j = 0
     while time.time() < end:
         j += 1
